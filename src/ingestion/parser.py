@@ -1,7 +1,6 @@
-"""BeautifulSoup parser for extracting quarterly financials from stored raw HTML."""
+"""BeautifulSoup parser for extracting quarterly financials from HTML."""
 import logging
 from datetime import datetime, date
-from pathlib import Path
 from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
 
@@ -108,10 +107,3 @@ def parse_quarterly_financials_html(html_content: str) -> Dict[str, Any]:
         "exchange": exchange,
         "periods": period_columns,
     }
-
-
-def parse_file_from_disk(file_path: Path) -> Dict[str, Any]:
-    """Reads saved raw HTML from disk and parses it."""
-    with open(file_path, "r", encoding="utf-8") as f:
-        content = f.read()
-    return parse_quarterly_financials_html(content)

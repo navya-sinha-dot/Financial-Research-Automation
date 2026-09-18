@@ -1,54 +1,57 @@
 """Celery ingestion tasks with failure isolation and structured logging."""
 import logging
 from typing import Dict, Any, List
+
 from src.core.celery_app import celery_app
 from src.core.database import SessionLocal
 from src.models.company import Company
 from src.models.financial import FinancialPeriod, FinancialLineItem
-from src.ingestion.scraper import fetch_company_financials_html
-from src.ingestion.parser import parse_quarterly_financials_html
+from src.ingestion.scraper import fetch_company_financials
 
 logger = logging.getLogger(__name__)
 
 
 @celery_app.task(bind=True, name="src.ingestion.tasks.ingest_company_financials")
 def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
-    """Ingests quarterly financials for a company into the database.
+    """Ingests quarterly financials for any publicly listed company into the database.
 
-    1. Fetches raw HTML (with retry and exponential backoff).
-    2. Parses structured periods and line items from the HTML (in-memory).
-    3. Upserts Company, FinancialPeriod, and FinancialLineItem rows.
-    4. Returns summary status dict.
+    1. Fetches live data via yfinance (real data for any valid ticker).
+    2. Upserts Company, FinancialPeriod, and FinancialLineItem rows.
+    3. Returns a summary status dict.
     """
     ticker_clean = ticker.upper().strip()
     logger.info(f"[Task {self.request.id}] Starting ingestion for ticker '{ticker_clean}'")
 
     try:
-        # 1: Fetch HTML (in-memory, no disk write)
-        html_content = fetch_company_financials_html(ticker_clean)
-
-        # 2: Parse HTML
-        parsed_data = parse_quarterly_financials_html(html_content)
-        periods_data = parsed_data.get("periods", [])
+        # Step 1: Fetch structured financial data (yfinance → fallback fixture)
+        company_data = fetch_company_financials(ticker_clean)
+        periods_data = company_data.get("periods", [])
 
         if not periods_data:
-            logger.warning(f"No financial periods parsed for {ticker_clean}")
+            logger.warning(f"No financial periods returned for {ticker_clean}")
             return {"ticker": ticker_clean, "status": "NO_DATA", "periods_ingested": 0}
 
-        # 3: Store in database
+        # Step 2: Upsert into database
         session = SessionLocal()
         try:
+            # -- Company row --
             company = session.query(Company).filter_by(ticker=ticker_clean).first()
             if not company:
                 company = Company(
                     ticker=ticker_clean,
-                    name=parsed_data.get("name", f"{ticker_clean} Corp"),
-                    sector=parsed_data.get("sector", "Information Technology"),
-                    exchange=parsed_data.get("exchange", "NASDAQ"),
+                    name=company_data.get("name", f"{ticker_clean} Corp"),
+                    sector=company_data.get("sector", "Information Technology"),
+                    exchange=company_data.get("exchange", "NASDAQ"),
                 )
                 session.add(company)
                 session.flush()
+            else:
+                # Update metadata in case it changed (e.g. was previously a bad ingestion)
+                company.name = company_data.get("name", company.name)
+                company.sector = company_data.get("sector", company.sector)
+                company.exchange = company_data.get("exchange", company.exchange)
 
+            # -- Period + line item rows --
             periods_count = 0
             for p_dict in periods_data:
                 period = (
@@ -82,55 +85,57 @@ def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
                             item_name=item_name,
                             value=val,
                             unit="USD (Millions)",
-                            source="scraper:live",
+                            source="yfinance",
                         )
                         session.add(line_item)
                     else:
+                        # Always overwrite with the freshest value
                         line_item.value = val
+                        line_item.source = "yfinance"
 
                 periods_count += 1
 
             session.commit()
             logger.info(
-                f"[Task {self.request.id}] Successfully ingested {periods_count} periods for {ticker_clean}"
+                f"[Task {self.request.id}] Ingested {periods_count} periods for "
+                f"'{ticker_clean}' ({company.name})"
             )
             return {
                 "ticker": ticker_clean,
                 "company_id": company.id,
+                "company_name": company.name,
                 "status": "SUCCESS",
                 "periods_ingested": periods_count,
             }
+
         except Exception as db_err:
             session.rollback()
-            logger.error(f"Database error during ingestion for {ticker_clean}: {db_err}", exc_info=True)
+            logger.error(
+                f"Database error during ingestion for {ticker_clean}: {db_err}",
+                exc_info=True,
+            )
             raise
         finally:
             session.close()
 
     except Exception as e:
-        logger.error(f"Failure during ingestion for {ticker_clean}: {e}", exc_info=True)
-        return {
-            "ticker": ticker_clean,
-            "status": "FAILED",
-            "error": str(e),
-        }
+        logger.error(f"Ingestion failed for '{ticker_clean}': {e}", exc_info=True)
+        return {"ticker": ticker_clean, "status": "FAILED", "error": str(e)}
 
 
 @celery_app.task(name="src.ingestion.tasks.ingest_batch_companies")
 def ingest_batch_companies(tickers: List[str]) -> Dict[str, Any]:
-    """Batch ingestion task with failure isolation.
+    """Batch ingestion with failure isolation.
 
-    A failure on any single company does NOT crash or stop the batch run.
+    A failure on any single ticker does NOT stop the rest of the batch.
     """
-    logger.info(f"Starting batch ingestion for {len(tickers)} companies: {tickers}")
+    logger.info(f"Starting batch ingestion for {len(tickers)} tickers: {tickers}")
     results = {}
     for ticker in tickers:
         try:
-            # Failure isolation: Each company's ingestion runs safely inside try/except
-            res = ingest_company_financials(ticker)
-            results[ticker] = res
+            results[ticker] = ingest_company_financials(ticker)
         except Exception as e:
-            logger.error(f"Batch ingestion item failed for {ticker}: {e}", exc_info=True)
+            logger.error(f"Batch item failed for '{ticker}': {e}", exc_info=True)
             results[ticker] = {"ticker": ticker, "status": "FAILED", "error": str(e)}
 
     return {"total": len(tickers), "results": results}
