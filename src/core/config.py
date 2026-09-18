@@ -32,13 +32,11 @@ class Settings(BaseSettings):
 
     # Storage Paths
     DATA_DIR: Path = Path("data")
-    RAW_HTML_DIR: Path = Path("data/raw_html")
     REPORTS_DIR: Path = Path("data/reports")
 
     def ensure_directories(self) -> None:
         """Ensure all required data directories exist."""
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
-        self.RAW_HTML_DIR.mkdir(parents=True, exist_ok=True)
         self.REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 

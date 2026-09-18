@@ -14,21 +14,20 @@ logger = logging.getLogger(__name__)
 @celery_app.task(bind=True, name="src.ingestion.tasks.ingest_company_financials")
 def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
     """Ingests quarterly financials for a company into the database.
-    
+
     1. Fetches raw HTML (with retry and exponential backoff).
-    2. Persists raw HTML to disk.
-    3. Parses structured periods and line items.
-    4. Upserts Company, FinancialPeriod, and FinancialLineItem rows.
-    5. Returns summary status dict.
+    2. Parses structured periods and line items from the HTML (in-memory).
+    3. Upserts Company, FinancialPeriod, and FinancialLineItem rows.
+    4. Returns summary status dict.
     """
     ticker_clean = ticker.upper().strip()
     logger.info(f"[Task {self.request.id}] Starting ingestion for ticker '{ticker_clean}'")
 
     try:
-        # 1 & 2: Fetch and persist HTML
-        html_content, saved_path = fetch_company_financials_html(ticker_clean)
-        
-        # 3: Parse HTML
+        # 1: Fetch HTML (in-memory, no disk write)
+        html_content = fetch_company_financials_html(ticker_clean)
+
+        # 2: Parse HTML
         parsed_data = parse_quarterly_financials_html(html_content)
         periods_data = parsed_data.get("periods", [])
 
@@ -36,7 +35,7 @@ def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
             logger.warning(f"No financial periods parsed for {ticker_clean}")
             return {"ticker": ticker_clean, "status": "NO_DATA", "periods_ingested": 0}
 
-        # 4: Store in database
+        # 3: Store in database
         session = SessionLocal()
         try:
             company = session.query(Company).filter_by(ticker=ticker_clean).first()
@@ -83,12 +82,11 @@ def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
                             item_name=item_name,
                             value=val,
                             unit="USD (Millions)",
-                            source=f"scraper:{saved_path.name}",
+                            source="scraper:live",
                         )
                         session.add(line_item)
                     else:
                         line_item.value = val
-                        line_item.source = f"scraper:{saved_path.name}"
 
                 periods_count += 1
 
@@ -101,7 +99,6 @@ def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
                 "company_id": company.id,
                 "status": "SUCCESS",
                 "periods_ingested": periods_count,
-                "raw_html_path": str(saved_path),
             }
         except Exception as db_err:
             session.rollback()
@@ -122,7 +119,7 @@ def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
 @celery_app.task(name="src.ingestion.tasks.ingest_batch_companies")
 def ingest_batch_companies(tickers: List[str]) -> Dict[str, Any]:
     """Batch ingestion task with failure isolation.
-    
+
     A failure on any single company does NOT crash or stop the batch run.
     """
     logger.info(f"Starting batch ingestion for {len(tickers)} companies: {tickers}")
