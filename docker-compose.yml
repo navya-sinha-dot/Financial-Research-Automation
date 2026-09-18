@@ -1,0 +1,114 @@
+version: "3.8"
+
+services:
+  # 1. PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: fra_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fra_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fra_password}
+      POSTGRES_DB: ${POSTGRES_DB:-fra_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - fra_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fra_user -d fra_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Redis Task Queue Broker
+  redis:
+    image: redis:7-alpine
+    container_name: fra_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # 3. FastAPI REST API (Sole gateway to Database)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fra_api
+    restart: unless-stopped
+    command: >
+      sh -c "alembic upgrade head &&
+             python scripts/seed_data.py &&
+             uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql://fra_user:fra_password@postgres:5432/fra_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - API_BASE_URL=http://api:8000
+    volumes:
+      - fra_data:/app/data
+      - ./src:/app/src
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # 4. Celery Worker (Async Ingestion & PPTX Report Generation)
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fra_worker
+    restart: unless-stopped
+    command: celery -A src.core.celery_app.celery_app worker --loglevel=info --concurrency=2
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql://fra_user:fra_password@postgres:5432/fra_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - API_BASE_URL=http://api:8000
+    volumes:
+      - fra_data:/app/data
+      - ./src:/app/src
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+  # 5. Streamlit Executive Dashboard
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fra_streamlit
+    restart: unless-stopped
+    command: streamlit run src/dashboard/app.py --server.port=8501 --server.address=0.0.0.0
+    ports:
+      - "8501:8501"
+    environment:
+      - API_BASE_URL=http://api:8000
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+    volumes:
+      - fra_data:/app/data
+      - ./src:/app/src
+    depends_on:
+      api:
+        condition: service_started
+
+volumes:
+  fra_pgdata:
+  fra_data:
