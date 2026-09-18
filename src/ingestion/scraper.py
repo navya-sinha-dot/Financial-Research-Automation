@@ -1,20 +1,13 @@
-"""Scraper module with exponential backoff retry and raw HTML disk persistence.
+"""Scraper module with exponential backoff retry.
 
 Ensures that:
 1. Every external request uses exponential backoff retry.
-2. Raw HTML is written to disk before any parsing for reprocessing & debugging.
-3. Errors are isolated per ticker and logged with full context.
+2. Errors are isolated per ticker and logged with full context.
 """
-import os
-import time
 import logging
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 import requests
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-
-from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -46,31 +39,17 @@ def fetch_raw_html_with_retry(url: str, timeout: int = 10) -> str:
     return response.text
 
 
-def save_raw_html(ticker: str, html_content: str) -> Path:
-    """Saves raw HTML to local disk under data/raw_html/ for debugging and reprocessing."""
-    settings.ensure_directories()
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    clean_ticker = ticker.upper().replace("/", "_").replace(".", "_")
-    filename = f"{clean_ticker}_{timestamp}.html"
-    filepath = settings.RAW_HTML_DIR / filename
-    
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(html_content)
-        
-    logger.info(f"Saved raw HTML for {ticker} to {filepath}")
-    return filepath
-
-
 def is_valid_financial_html(html: str) -> bool:
     """Verifies that the retrieved HTML contains recognizable financial statement content."""
     lower = html.lower()
     return ("revenue" in lower or "financial" in lower) and ("table" in lower or "breakdown" in lower or "tbody" in lower)
 
 
-def fetch_company_financials_html(ticker: str, source_url: Optional[str] = None) -> Tuple[str, Path]:
-    """Fetches raw quarterly financials HTML for a ticker, saving raw HTML to disk.
-    
+def fetch_company_financials_html(ticker: str, source_url: Optional[str] = None) -> str:
+    """Fetches raw quarterly financials HTML for a ticker.
+
     Includes failure isolation so errors are captured and logged with full context.
+    Falls back to structured fixture HTML when the live source is unavailable or blocked.
     """
     ticker_clean = ticker.upper().strip()
     logger.info(f"Starting financial scrape for ticker '{ticker_clean}'")
@@ -92,9 +71,7 @@ def fetch_company_financials_html(ticker: str, source_url: Optional[str] = None)
         )
         html_content = generate_fallback_financial_html(ticker_clean)
 
-    # Save to disk before any parsing
-    saved_path = save_raw_html(ticker_clean, html_content)
-    return html_content, saved_path
+    return html_content
 
 
 def generate_fallback_financial_html(ticker: str) -> str:
