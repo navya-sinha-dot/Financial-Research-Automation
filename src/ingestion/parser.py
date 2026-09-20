@@ -1,109 +1,60 @@
-"""BeautifulSoup parser for extracting quarterly financials from HTML."""
+"""SEC EDGAR HTML parser for quarterly financial statements."""
+from __future__ import annotations
+
+import html
 import logging
-from datetime import datetime, date
-from typing import Dict, List, Any, Optional
-from bs4 import BeautifulSoup
+import re
+from typing import Any, Dict, Iterable
+
+from src.ingestion.normalizer import normalize_statement_rows
 
 logger = logging.getLogger(__name__)
 
 
-def parse_quarterly_financials_html(html_content: str) -> Dict[str, Any]:
-    """Parses raw HTML and extracts company metadata and structured quarterly financial items."""
-    soup = BeautifulSoup(html_content, "html.parser")
+def _clean_cell_text(value: str) -> str:
+    text = html.unescape(value or "")
+    text = re.sub(r"<.*?>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
-    # Extract ticker and metadata
-    ticker_tag = soup.find("h1", class_="ticker")
-    ticker = ticker_tag.text.strip() if ticker_tag else "UNKNOWN"
 
-    sector_tag = soup.find("span", class_="sector")
-    sector = sector_tag.text.strip() if sector_tag else "Information Technology"
+def _statement_target_for_row(label: str) -> str:
+    label_l = label.lower()
+    if any(term in label_l for term in ["revenue", "cost of revenue", "gross profit", "operating income", "net income", "basic eps", "diluted eps"]):
+        return "income_statement"
+    if any(term in label_l for term in ["cash and cash", "current assets", "total assets", "current liabilities", "total liabilities", "shareholders' equity", "total debt"]):
+        return "balance_sheet"
+    if any(term in label_l for term in ["operating cash flow", "capital expenditure", "investing cash flow", "financing cash flow", "free cash flow"]):
+        return "cash_flow"
+    return "income_statement"
 
-    exchange_tag = soup.find("span", class_="exchange")
-    exchange = exchange_tag.text.strip() if exchange_tag else "NASDAQ"
 
-    # Find financial table
-    table = soup.find("table", class_="financial-table")
-    if not table:
-        # Fallback table search
-        table = soup.find("table")
-        if not table:
-            logger.warning(f"No financial <table> found in HTML for ticker {ticker} (client-side JS rendered). Using structured parser fallback.")
-            from src.ingestion.scraper import generate_fallback_financial_html
-            fallback_soup = BeautifulSoup(generate_fallback_financial_html(ticker), "html.parser")
-            table = fallback_soup.find("table", class_="financial-table")
-            if not table:
-                return {"ticker": ticker, "sector": sector, "exchange": exchange, "periods": []}
+def parse_financial_statements(html_content: str) -> Dict[str, Dict[str, Any]]:
+    """Extract a normalized set of SEC financial statements from filing HTML."""
+    tables = re.findall(r"<table[^>]*>(.*?)</table>", html_content, flags=re.IGNORECASE | re.DOTALL)
+    statements: Dict[str, Dict[str, Any]] = {"income_statement": {}, "balance_sheet": {}, "cash_flow": {}}
 
-    # Extract headers (periods)
-    headers = table.find("thead").find_all("th")
-    period_columns = []
-    for th in headers[1:]:  # skip 'Breakdown' column
-        q_label = th.get("data-quarter", th.text.split()[0] if th.text else "Q1")
-        year_str = th.get("data-year", th.text.split()[-1] if len(th.text.split()) > 1 else "2024")
-        date_str = th.get("data-date")
-        
-        try:
-            fiscal_year = int(year_str)
-        except (ValueError, TypeError):
-            fiscal_year = 2024
-
-        if date_str:
-            try:
-                report_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-            except ValueError:
-                report_date = date(fiscal_year, 3, 31)
-        else:
-            report_date = date(fiscal_year, 3, 31)
-
-        period_columns.append({
-            "period_type": q_label,
-            "fiscal_year": fiscal_year,
-            "report_date": report_date,
-            "items": {},
-        })
-
-    # Extract rows (metrics)
-    tbody = table.find("tbody")
-    if tbody:
-        rows = tbody.find_all("tr")
-        for tr in rows:
-            metric_key = tr.get("data-metric")
-            cells = tr.find_all("td")
-            if not cells or len(cells) < 2:
+    for table_html in tables:
+        rows = re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, flags=re.IGNORECASE | re.DOTALL)
+        for row_html in rows:
+            cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row_html, flags=re.IGNORECASE | re.DOTALL)
+            if len(cells) < 2:
                 continue
+            label = _clean_cell_text(cells[0])
+            value = _clean_cell_text(cells[1])
+            if not label or not value:
+                continue
+            target = _statement_target_for_row(label)
+            statements[target][label] = value
 
-            if not metric_key:
-                # Normalize text from first cell
-                raw_name = cells[0].text.strip().lower()
-                if "revenue" in raw_name:
-                    metric_key = "revenue"
-                elif "net income" in raw_name:
-                    metric_key = "net_income"
-                elif "operating" in raw_name:
-                    metric_key = "operating_income"
-                elif "equity" in raw_name:
-                    metric_key = "total_equity"
-                elif "current asset" in raw_name:
-                    metric_key = "current_assets"
-                elif "current liabilit" in raw_name:
-                    metric_key = "current_liabilities"
-                else:
-                    metric_key = raw_name.replace(" ", "_")
-
-            # Map values to corresponding period columns
-            for col_idx, td in enumerate(cells[1:]):
-                if col_idx < len(period_columns):
-                    val_text = td.text.strip().replace(",", "").replace("$", "")
-                    try:
-                        val = float(val_text)
-                    except (ValueError, TypeError):
-                        val = 0.0
-                    period_columns[col_idx]["items"][metric_key] = val
-
-    return {
-        "ticker": ticker,
-        "name": f"{ticker} Corporation",
-        "sector": sector,
-        "exchange": exchange,
-        "periods": period_columns,
+    normalized = {
+        "income_statement": normalize_statement_rows(statements["income_statement"]),
+        "balance_sheet": normalize_statement_rows(statements["balance_sheet"]),
+        "cash_flow": normalize_statement_rows(statements["cash_flow"]),
     }
+    return normalized
+
+
+def parse_quarterly_financials_html(html_content: str) -> Dict[str, Any]:
+    """Compatibility wrapper for older ingestion callers."""
+    return parse_financial_statements(html_content)

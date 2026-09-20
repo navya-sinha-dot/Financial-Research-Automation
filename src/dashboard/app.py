@@ -159,14 +159,14 @@ selected_company = company_options.get(selected_label) if company_options else N
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚡ Live Data Ingestion")
-st.sidebar.caption("Trigger async scraping & line item extraction for any ticker:")
+st.sidebar.caption("Search a ticker to watch SEC Chromium scraping in real time:")
 new_ticker = st.sidebar.text_input("Ticker Symbol (e.g., AAPL, GOOGL, INFY)", value="").strip().upper()
 if st.sidebar.button("Fetch & Ingest Ticker", use_container_width=True):
     if new_ticker:
         with st.sidebar.status(f"Triggering ingestion for {new_ticker}..."):
             ingest_res = client.trigger_ingestion(new_ticker)
             if ingest_res and ingest_res.get("status") in ("QUEUED", "SUCCESS"):
-                st.sidebar.success(f"Task queued! Task ID: {ingest_res.get('task_id')[:8]}")
+                st.sidebar.success(f"SEC scrape complete. Task ID: {ingest_res.get('task_id')[:8]}")
                 time.sleep(1)
                 st.rerun()
             else:
@@ -179,7 +179,7 @@ st.sidebar.markdown(
     """
     <div style='font-size: 11px; color: #64748B;'>
         <b>FRA System Architecture:</b><br/>
-        • Scraping: BeautifulSoup + Retries<br/>
+        • Scraping: Playwright + SEC EDGAR<br/>
         • Analytics: Isolated Python Engine<br/>
         • Reports: python-pptx Async Tasks<br/>
         • Database: PostgreSQL (SQLAlchemy)<br/>

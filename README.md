@@ -1,150 +1,161 @@
-# Financial Research Automation (FRA)
-### *Your Automated AI Financial Analyst & Pitch Deck Generator*
+# Financial Research Automation
 
-Welcome to **Financial Research Automation (FRA)**! 
+Financial Research Automation (FRA) is a Python-based SEC filing analysis pipeline that resolves companies, discovers the latest 10-Q/10-K filings, opens them in a visible Playwright + Chromium browser, extracts financial statement tables, normalizes the values, validates the result, and evaluates the company using financial analytics and charts.
 
-If you don't have a finance or economics background, **don't worry**. Think of this platform as your personal, automated Wall Street analyst. It automatically collects financial numbers for major tech companies, calculates how healthy and profitable they are in plain terms, and builds ready-to-present PowerPoint slide decks at the click of a button.
+## Overview
 
----
+This project is deliberately moving away from the old Yahoo Finance-centric workflow and toward a browser-based SEC EDGAR pipeline. The main principles are:
 
-## In Plain English: What Does This System Do?
+- SEC EDGAR is the primary financial data source.
+- Playwright + Chromium are used for the live browser scraping demonstration.
+- SEC API discovery is used for company lookup and filing metadata.
+- Financial values are normalized before analytics.
+- Data is traceable back to the filing and statement line item.
+- Demo mode opens a visible browser so the extraction process can be watched.
 
-Imagine you wanted to invest in or research an IT company (like **Infosys**, **TCS**, or **Microsoft**):
-
-1. **Normally**, you would have to manually hunt down quarterly financial reports, copy numbers into Excel, write complex formulas, draw charts, and copy-paste them into a PowerPoint presentation. This takes hours.
-2. **With FRA**, you pick a company name or type a stock ticker symbol. The platform automatically fetches the data, calculates the company's financial health, displays interactive charts, and produces a complete 4-slide **investor PowerPoint presentation (.pptx)** in seconds.
-
----
-
-## Where Does the Data Come From?
-
-1. **Primary Web Scraper**: The system queries public financial pages (such as **Yahoo Finance Financials** at `https://finance.yahoo.com/quote/{TICKER}/financials`).
-2. **Raw HTML Safety Copy**: Before touching or parsing the data, FRA saves the exact raw HTML webpage directly to your local disk under `data/raw_html/`. If a website ever changes or goes offline, you still have the exact snapshot for auditing and debugging.
-3. **Resilient Fallback**: Public websites occasionally block automated bots or change layout formats. If an anti-bot check or network glitch occurs, FRA automatically falls back to an internal structured financial statement generator, ensuring your batch reports and tests never crash.
-4. **Pre-Loaded Sample Data**: To let you test immediately without waiting for scraping, the database comes pre-seeded with real quarterly data for **Infosys (INFY)**, **Tata Consultancy Services (TCS)**, and **Microsoft (MSFT)**.
-
----
-
-## Finance 101: Simple Explanations of Every Metric
-
-Here is a cheat-sheet of every financial concept used in the dashboard and reports, explained with everyday analogies:
-
-| Financial Term | Real-World Analogy | Formula | What a Good Number Looks Like |
-| :--- | :--- | :--- | :--- |
-| **Revenue** (Sales) | The total cash that went into the store register before paying any bills. | Sum of all sales | Higher is better. Steady growth over time. |
-| **Net Income** (Profit) | What is left in your bank account after paying employee salaries, office rent, cloud servers, and taxes. | $\text{Revenue} - \text{All Expenses}$ | Must be positive. Higher means the company actually makes money. |
-| **Net Profit Margin** | Out of every \$100 the company makes in sales, how many dollars are pure profit? | $\frac{\text{Net Income}}{\text{Revenue}}$ | **15% to 25%+** is considered strong for IT services and software companies. |
-| **Return on Equity (ROE)** | If investors gave the company \$100 of capital, how much profit did management generate with it? | $\frac{\text{Net Income}}{\text{Total Stockholders' Equity}}$ | **15% to 20%+** shows that management is very effective at multiplying shareholders' money. |
-| **Current Ratio** (Liquidity) | A measure of safety: Can the company pay its short-term bills due in the next 12 months using its cash and short-term assets? | $\frac{\text{Current Assets}}{\text{Current Liabilities}}$ | **1.5x to 2.5x** is healthy. If below 1.0x, the company owes more in the short term than it has in quick cash. |
-| **YoY Growth** (Year-over-Year) | Comparing this quarter's sales to the **exact same quarter last year** (e.g., Q1 2024 vs Q1 2023). Avoids seasonal distortion. | $\frac{\text{Rev}_{\text{this year}} - \text{Rev}_{\text{last year}}}{\text{Rev}_{\text{last year}}}$ | Positive growth (e.g. **+8% to +15%**) shows an expanding business. |
-| **QoQ Growth** (Quarter-over-Quarter) | Comparing this quarter's sales to the **immediately preceding quarter** (e.g., Q2 vs Q1). | $\frac{\text{Rev}_{\text{this quarter}} - \text{Rev}_{\text{last quarter}}}{\text{Rev}_{\text{last quarter}}}$ | Shows immediate short-term business momentum. |
-| **Peer Percentile Ranking** | Grading companies "on a curve" against their rivals. If Company A has a **75th percentile** Net Margin, it is more profitable than 75% of competitors in its group. | Statistical rank ($0\%$ to $100\%$) | **50th** is average; **80th+** is an industry leader. |
-
----
-
-## How Everything Works Behind the Scenes (Architecture)
-
-FRA is built in distinct, isolated layers so that no single error can bring down the entire system:
+## Architecture
 
 ```mermaid
-graph TD
-    User([User]) -->|Browser :8501| Streamlit[Streamlit Dashboard]
-    Streamlit -->|HTTP REST Requests| FastAPI[FastAPI Backend :8000]
-    FastAPI -->|SQLAlchemy| DB[(PostgreSQL / SQLite Database)]
-    FastAPI -->|Async Job Queue| Celery[Celery Workers + Redis]
-    Celery -->|1. Scrape Web & Save HTML| Scraper[Ingestion Layer]
-    Celery -->|2. Compute Pure Math| Analytics[Analytics Engine]
-    Celery -->|3. Draw Matplotlib Charts| Charts[Chart Generator]
-    Celery -->|4. Assemble Slides| PPTX[python-pptx Deck Builder]
-    PPTX -->|Save .pptx| Disk[Reports Storage]
-    FastAPI -->|Stream .pptx File| Streamlit
+flowchart TD
+    A[User] --> B[Ticker]
+    B --> C[SEC Filing Discovery]
+    C --> D[Find 10-Q / 10-K]
+    D --> E[Playwright]
+    E --> F[Chromium]
+    F --> G[SEC Filing HTML]
+    G --> H[Financial Parser]
+    H --> I[Normalization]
+    I --> J[Validation]
+    J --> K[Pandas]
+    K --> L[Financial Analytics]
+    L --> M[Charts]
+    L --> N[Streamlit]
+    L --> O[PowerPoint Report]
 ```
 
-### 1. Ingestion Layer (`src/ingestion/`)
-- Takes a company ticker (like `INFY` or `AAPL`).
-- Downloads the quarterly income statements and balance sheets with exponential backoff retry.
-- Saves raw HTML files to `data/raw_html/` for auditing.
-- Parses numbers cleanly and inserts them into flexible key-value database rows.
-- **Failure Isolation**: If one company's scrape fails, it is caught safely and will never crash other batch jobs.
+## Data flow
 
-### 2. Analytics Engine (`src/analytics/`)
-- A standalone, pure Python math module.
-- Has **no database or website code inside it**.
-- Takes pure numbers and computes margins, ROE, YoY/QoQ growth, and statistical peer percentile ranks using Pandas.
+1. A company ticker is entered.
+2. SEC company lookup and filing discovery resolve the latest filing metadata.
+3. The browser opens the filing page in Chromium.
+4. The scraper locates the income statement, balance sheet, and cash flow tables.
+5. Raw values are parsed and normalized.
+6. Validation checks for missing/malformed data or suspicious balances.
+7. Pandas is used to compute finance metrics and trends.
+8. Charts and a PowerPoint report are generated.
 
-### 3. Reporting Engine (`src/reporting/`)
-- Generates high-resolution Matplotlib charts:
-  - Multi-bar **Revenue & Net Income Trajectory**
-  - Line graph of **Profit Margins vs ROE**
-  - Horizontal bar chart of **Peer Competitive Standings**
-- Assembles an institutional 4-slide widescreen PowerPoint deck (`.pptx`) with professional dark/navy themes, executive KPI cards, tables, and analytical takeaways.
+## Primary technology stack
 
-### 4. API Layer (`src/api/`)
-- Built with **FastAPI**.
-- **Crucial Security Guardrail**: The API is the **only component allowed to touch the database**. The dashboard and report generators never write to or read from the database directly; they communicate strictly over HTTP.
+- Python
+- Playwright
+- Chromium
+- SEC EDGAR
+- Pandas
+- Matplotlib / Plotly
+- Streamlit
+- python-pptx
 
-### 5. Frontend Dashboard (`src/dashboard/`)
-- An interactive web application built with **Streamlit**.
-- Features an executive dark theme with glassmorphism KPI cards, interactive trend charts, and a non-blocking **"Generate PPTX Report"** button with real-time status polling.
+## Why SEC EDGAR
 
----
+SEC EDGAR is the official public filing source for company financial statements. It offers a consistent and well-documented source for 10-Q and 10-K filings, and it does not depend on market-price wrappers like Yahoo Finance.
 
-## How to Run the Project
+## Why Playwright
 
-### If you are using Git Bash:
+Playwright provides real browser automation and is suitable for demonstrating the physical extraction path visible in a live Chromium window. This matches the project requirement to show browser-based scraping rather than replacing it with a direct HTTP API-only approach.
 
-#### 1. Open Terminal 1 — Start the FastAPI Backend:
-```bash
-source .venv/Scripts/activate
-uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
-```
-* Interactive API Documentation: Open **[http://localhost:8000/docs](http://localhost:8000/docs)**
+## Installation
 
-#### 2. Open Terminal 2 — Start the Streamlit Dashboard:
-```bash
-source .venv/Scripts/activate
-streamlit run src/dashboard/app.py --server.port=8501
-```
-* Interactive Dashboard: Open **[http://localhost:8501](http://localhost:8501)**
-
----
-
-## How to Use the Dashboard
-
-1. **Select a Company**: In the left sidebar dropdown, choose **Infosys (INFY)**, **TCS**, or **Microsoft (MSFT)**.
-2. **Review the Scorecards**: Look at the top cards to see the company's latest quarterly revenue, net profit margin, and whether growth was positive (green) or negative (red).
-3. **Explore Analytics Tabs**:
-   - **Financial Trajectory**: Interactive bar charts of revenues and profits.
-   - **Ratio & Margin Dynamics**: Line charts showing how profitability and cash safety change over time.
-   - **Peer Benchmark Ranking**: See how the selected company stacks up against its industry rivals.
-   - **Financial Statements**: Raw numbers categorized by quarter.
-4. **Generate a PowerPoint Pitch Deck**:
-   - Click the blue **"Generate PPTX Report"** button in the top right.
-   - The app will run an asynchronous background job without freezing your browser.
-   - Once complete, click **"Download Presentation (.pptx)"** to save the deck to your computer.
-
----
-
-## Running Automated Tests
-
-To verify that all calculations, scraping fallbacks, API routes, and presentation builders are functioning with 100% accuracy:
+Create a Python environment and install dependencies:
 
 ```bash
-source .venv/Scripts/activate
-pytest tests/ -v
+python -m venv .venv
+. .venv/bin/activate  # Linux/macOS
+.venv\Scripts\activate  # Windows
+pip install -r requirements.txt
+python -m playwright install chromium
 ```
-*All 20 unit and integration tests will run and pass in ~5 seconds.*
 
----
+## Environment variables
 
-## Running with Docker Compose (Production Setup)
-
-If you have Docker Desktop installed, you can start the entire multi-container stack (PostgreSQL database, Redis cache, FastAPI server, Celery worker, and Streamlit dashboard) with a single command:
+Copy the example file and adjust values as needed:
 
 ```bash
-docker-compose up --build
+cp .env.example .env
 ```
-- **Streamlit**: `http://localhost:8501`
-- **FastAPI**: `http://localhost:8000/docs`
-- **PostgreSQL**: port `5432`
-- **Redis**: port `6379`
+
+Key variables include:
+
+- SEC_USER_AGENT
+- SCRAPER_HEADLESS
+- SCRAPER_SLOW_MO
+- SCRAPER_TIMEOUT
+- DEBUG
+- SEC_REQUEST_DELAY
+
+## Demo mode
+
+```bash
+python scripts/run_pipeline.py AAPL --demo
+```
+
+This opens a visible Chromium browser and shows the filing being processed step by step.
+
+## Headless mode
+
+```bash
+python scripts/run_pipeline.py AAPL --headless
+```
+
+This runs without visible browser UI and is intended for automation and CI usage.
+
+## CLI usage
+
+```bash
+python scripts/scrape_company.py AAPL --demo
+python scripts/scrape_company.py AAPL --headless
+python scripts/run_pipeline.py AAPL --demo
+```
+
+## Streamlit dashboard
+
+```bash
+streamlit run src/dashboard/app.py
+```
+
+## Testing
+
+```bash
+python -m pytest tests/ -q
+```
+
+## Project structure
+
+- src/core — central config and logging
+- src/ingestion — SEC client, browser, discovery, scraper, parser, normalizer
+- src/analytics — financial analytics modules
+- src/reporting — charts, report generation, PPTX builder
+- src/dashboard — Streamlit app
+- data/ — raw, processed, cache, debug, reports
+
+## Debugging and screenshots
+
+The scraper writes debug artifacts into the data directory, including screenshots and HTML snapshots for failed pages and CAPTCHA detection.
+
+## CAPTCHA and access challenges
+
+The pipeline does not bypass CAPTCHA or anti-bot controls. Instead, it detects challenges, logs a warning, saves screenshots and HTML, and pauses in demo mode until the user completes the manual step.
+
+## SEC rate-limit considerations
+
+The project uses a descriptive User-Agent, request throttling, duplicate-request prevention, and cached metadata to avoid unnecessary SEC traffic.
+
+## Data provenance
+
+Every extracted value should be traceable to a filing, statement, and line item. The system keeps the raw values as well as normalized values so the source is visible in downstream reporting.
+
+## Limitations
+
+- SEC filing structure can change over time.
+- Some HTML layouts require statement-specific parsing logic.
+- Live browser-based scraping should be used carefully and in compliance with SEC and site policies.
+- CAPTCHA or anti-bot checks require manual intervention in demo mode.

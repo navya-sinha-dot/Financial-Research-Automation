@@ -1,16 +1,14 @@
-"""Tests for the ingestion layer: yfinance fetch, parsing, and failure isolation."""
-import pytest
-from unittest.mock import patch, MagicMock
+"""Tests for the SEC ingestion layer and failure isolation."""
+from unittest.mock import patch
 from datetime import date
 
-from src.ingestion.scraper import fetch_company_financials, _get_fallback_data
+from src.ingestion.scraper import _get_fallback_data
 from src.ingestion.tasks import ingest_company_financials, ingest_batch_companies
 from src.models.company import Company
-from src.models.financial import FinancialPeriod, FinancialLineItem
 
 
 def _mock_company_data(ticker: str):
-    """Returns a realistic structured data dict for testing without hitting yfinance."""
+    """Return realistic structured data for testing without network access."""
     return {
         "ticker": ticker,
         "name": f"{ticker} Corporation",

@@ -1,231 +1,155 @@
-"""Scraper module using yfinance for reliable real-time financial data.
+"""SEC filing scraper built around Playwright and Chromium."""
+from __future__ import annotations
 
-Why yfinance instead of raw Selenium/requests:
-  Yahoo Finance renders financial tables with JavaScript/React. A plain HTTP
-  request only receives the page shell — the actual data tables never arrive.
-  yfinance bypasses this by calling Yahoo Finance's internal JSON APIs directly,
-  returning real quarterly financials for any publicly listed ticker.
-
-Fallback:
-  If yfinance fails (invalid ticker, network error, rate limit), structured
-  fixture data is returned so the rest of the pipeline still works.
-"""
 import logging
+import re
 from datetime import date
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, Iterable
 
-import pandas as pd
+from src.core.config import settings
+from src.core.constants import DEBUG_DIR
+from src.ingestion.browser import create_page, save_debug_html, save_debug_screenshot, close_browser
+from src.ingestion.captcha_handler import handle_captcha
+from src.ingestion.filing_discovery import discover_latest_filing
+from src.ingestion.normalizer import normalize_financial_value
+from src.ingestion.parser import parse_financial_statements
 
 logger = logging.getLogger(__name__)
 
 
-class ScrapingError(Exception):
-    """Raised when all data-fetch strategies have been exhausted."""
-    pass
+def open_filing(url: str):
+    page = create_page()
+    page.goto(url, wait_until="domcontentloaded", timeout=int(getattr(settings, "SCRAPER_TIMEOUT", 30000)))
+    logger.info("[BROWSER] goto(%s)", url)
+    save_debug_screenshot("01_sec_page.png", page)
+    return page
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+def wait_for_filing(page, *, timeout: int = 30000) -> None:
+    page.wait_for_load_state("networkidle", timeout=timeout)
+    if handle_captcha(page, is_demo=str(getattr(settings, "SCRAPER_HEADLESS", "false")).lower() == "false"):
+        logger.info("[BROWSER] challenge cleared")
+    logger.info("[BROWSER] page loaded")
+    save_debug_screenshot("02_filing_loaded.png", page)
+
+
+def locate_income_statement(page):
+    locator = page.locator("text=CONSOLIDATED STATEMENTS OF OPERATIONS")
+    if locator.count() > 0:
+        logger.info("[BROWSER] searching for \"CONSOLIDATED STATEMENTS OF OPERATIONS\"")
+        return True
+    return False
+
+
+def locate_balance_sheet(page):
+    return page.locator("text=CONSOLIDATED BALANCE SHEETS").count() > 0 or page.locator("text=BALANCE SHEET").count() > 0
+
+
+def locate_cash_flow_statement(page):
+    return page.locator("text=CONSOLIDATED STATEMENTS OF CASH FLOWS").count() > 0 or page.locator("text=CASH FLOW").count() > 0
+
+
+def extract_table(page, table_text_hint: str):
+    html = page.content()
+    matches = re.findall(r"<table[^>]*>(.*?)</table>", html, flags=re.IGNORECASE | re.DOTALL)
+    for table in matches:
+        if table_text_hint.lower() in table.lower():
+            return table
+    if matches:
+        return matches[0]
+    raise ValueError(f"Could not locate table for {table_text_hint}.")
+
+
+def extract_financial_rows(page, table_text_hint: str) -> Dict[str, Any]:
+    table_html = extract_table(page, table_text_hint)
+    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, flags=re.IGNORECASE | re.DOTALL)
+    result: Dict[str, Any] = {}
+    for row in rows:
+        cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, flags=re.IGNORECASE | re.DOTALL)
+        if len(cells) < 2:
+            continue
+        label = re.sub(r"<.*?>", "", cells[0])
+        value = re.sub(r"<.*?>", "", cells[1])
+        label = re.sub(r"\s+", " ", label).strip()
+        value = re.sub(r"\s+", " ", value).strip()
+        if label and value:
+            result[label] = value
+    return result
+
+
+def extract_financial_value(raw_text: str) -> float | None:
+    return normalize_financial_value(raw_text)
+
+
+def scrape_filing(ticker: str, filing_url: str, *, demo: bool = False) -> Dict[str, Any]:
+    logger.info("[1/10] Resolving company")
+    info = discover_latest_filing(ticker)
+    logger.info("[OK] %s", info["company_name"])
+
+    logger.info("[2/10] Finding latest 10-Q")
+    logger.info("[OK] %s found", info["filing_type"])
+
+    logger.info("[3/10] Launching Chromium")
+    page = open_filing(filing_url)
+    logger.info("[OK] Browser started")
+
+    logger.info("[4/10] Opening filing")
+    wait_for_filing(page)
+    logger.info("[OK] Filing loaded")
+
+    statements: Dict[str, Dict[str, Any]] = {"income_statement": {}, "balance_sheet": {}, "cash_flow": {}}
+
+    for step_name, hint, key in [
+        ("[5/10] Scraping Income Statement", "CONSOLIDATED STATEMENTS OF OPERATIONS", "income_statement"),
+        ("[6/10] Scraping Balance Sheet", "CONSOLIDATED BALANCE SHEETS", "balance_sheet"),
+        ("[7/10] Scraping Cash Flow", "CONSOLIDATED STATEMENTS OF CASH FLOWS", "cash_flow"),
+    ]:
+        logger.info(step_name)
+        raw_rows = extract_financial_rows(page, hint)
+        if not raw_rows:
+            raise ValueError(f"Could not locate the {key} in the filing.")
+        for label, raw in raw_rows.items():
+            normalized = extract_financial_value(raw)
+            if normalized is not None:
+                statements[key][label] = normalized
+        logger.info("[OK] %s extracted", key.replace("_", " ").title())
+        save_debug_screenshot(f"{key}.png" if key in {"income_statement", "balance_sheet", "cash_flow"} else "debug.png", page)
+
+    html = page.content()
+    save_debug_html("filing_content.html", html)
+    close_browser()
+    logger.info("[10/10] Closing browser")
+    return {
+        "company": info["company_name"],
+        "ticker": ticker.upper(),
+        "cik": info["cik"],
+        "filing": info,
+        "statements": {**statements},
+    }
+
 
 def fetch_company_financials(ticker: str) -> Dict[str, Any]:
-    """Fetches quarterly financial data for any publicly listed ticker.
-
-    Returns a structured dict:
-    {
-        "ticker": "GOOGL",
-        "name": "Alphabet Inc.",
-        "sector": "Communication Services",
-        "exchange": "NASDAQ",
-        "periods": [
-            {
-                "period_type": "Q1",
-                "fiscal_year": 2024,
-                "report_date": date(2024, 3, 31),
-                "items": {
-                    "revenue": 80539.0,          # USD Millions
-                    "net_income": 23662.0,
-                    "operating_income": 25472.0,
-                    "total_equity": 306695.0,
-                    "current_assets": 152199.0,
-                    "current_liabilities": 74235.0,
-                }
+    """Compatibility wrapper for the old ingestion API."""
+    filing = discover_latest_filing(ticker)
+    result = scrape_filing(ticker, filing["filing_url"], demo=False)
+    return {
+        "ticker": ticker.upper(),
+        "name": filing["company_name"],
+        "periods": [{
+            "period_type": "Q1",
+            "fiscal_year": 2026,
+            "report_date": filing["filing_date"],
+            "items": {
+                **result["statements"].get("income_statement", {}),
+                **result["statements"].get("balance_sheet", {}),
+                **result["statements"].get("cash_flow", {}),
             },
-            ...  # up to 4 most recent quarters
-        ]
+        }],
     }
-    """
-    ticker_clean = ticker.upper().strip()
-    logger.info(f"Fetching financials for '{ticker_clean}' via yfinance")
 
-    try:
-        import yfinance as yf
-        yticker = yf.Ticker(ticker_clean)
-
-        # -- Company metadata --
-        info = yticker.info or {}
-        name = (
-            info.get("longName")
-            or info.get("shortName")
-            or f"{ticker_clean} Corp"
-        )
-        sector = info.get("sector") or "Information Technology"
-        exchange = info.get("exchange") or "NASDAQ"
-
-        # -- Quarterly financials --
-        income_stmt = yticker.quarterly_income_stmt   # rows=metrics, cols=periods
-        balance_sheet = yticker.quarterly_balance_sheet
-
-        if income_stmt is None or income_stmt.empty:
-            raise ValueError(f"No quarterly income statement data returned for '{ticker_clean}'")
-
-        periods = _build_periods(income_stmt, balance_sheet)
-
-        if not periods:
-            raise ValueError(f"Could not extract any financial periods for '{ticker_clean}'")
-
-        logger.info(f"Successfully fetched {len(periods)} quarters for '{ticker_clean}' ({name})")
-        return {
-            "ticker": ticker_clean,
-            "name": name,
-            "sector": sector,
-            "exchange": exchange,
-            "periods": periods,
-        }
-
-    except ImportError:
-        logger.error("yfinance is not installed. Run: pip install yfinance")
-        return _get_fallback_data(ticker_clean)
-    except Exception as exc:
-        logger.warning(
-            f"yfinance fetch failed for '{ticker_clean}': {exc}. "
-            "Falling back to fixture data."
-        )
-        return _get_fallback_data(ticker_clean)
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-def _get_value(df: pd.DataFrame, col, *row_keys) -> Optional[float]:
-    """Tries each row key in order; returns value in USD Millions, or None."""
-    for key in row_keys:
-        try:
-            if key in df.index:
-                v = df.loc[key, col]
-                if pd.notna(v):
-                    return round(float(v) / 1_000_000, 2)
-        except Exception:
-            continue
-    return None
-
-
-def _date_to_quarter(d: date) -> str:
-    """Maps a calendar month to a fiscal quarter label."""
-    if d.month in (1, 2, 3):
-        return "Q1"
-    elif d.month in (4, 5, 6):
-        return "Q2"
-    elif d.month in (7, 8, 9):
-        return "Q3"
-    else:
-        return "Q4"
-
-
-def _build_periods(
-    income_stmt: pd.DataFrame,
-    balance_sheet: Optional[pd.DataFrame],
-) -> List[Dict[str, Any]]:
-    """Converts yfinance DataFrames into the standard period/line-item list."""
-    periods = []
-
-    for col in income_stmt.columns:
-        # col is a Timestamp — convert to date
-        report_date: date = col.date() if hasattr(col, "date") else col
-
-        items: Dict[str, float] = {}
-
-        # -- Income statement metrics --
-        revenue = _get_value(
-            income_stmt, col,
-            "Total Revenue", "Revenue",
-        )
-        net_income = _get_value(
-            income_stmt, col,
-            "Net Income", "Net Income Common Stockholders",
-        )
-        operating_income = _get_value(
-            income_stmt, col,
-            "Operating Income", "EBIT",
-        )
-
-        if revenue is not None:
-            items["revenue"] = revenue
-        if net_income is not None:
-            items["net_income"] = net_income
-        if operating_income is not None:
-            items["operating_income"] = operating_income
-
-        # -- Balance sheet metrics (matched by nearest available date) --
-        if balance_sheet is not None and not balance_sheet.empty:
-            bs_col = col if col in balance_sheet.columns else _nearest_column(balance_sheet, col)
-            if bs_col is not None:
-                total_equity = _get_value(
-                    balance_sheet, bs_col,
-                    "Stockholders Equity",
-                    "Common Stock Equity",
-                    "Total Equity Gross Minority Interest",
-                )
-                current_assets = _get_value(
-                    balance_sheet, bs_col,
-                    "Current Assets",
-                )
-                current_liabilities = _get_value(
-                    balance_sheet, bs_col,
-                    "Current Liabilities",
-                )
-
-                if total_equity is not None:
-                    items["total_equity"] = total_equity
-                if current_assets is not None:
-                    items["current_assets"] = current_assets
-                if current_liabilities is not None:
-                    items["current_liabilities"] = current_liabilities
-
-        if not items:
-            continue
-
-        periods.append({
-            "period_type": _date_to_quarter(report_date),
-            "fiscal_year": report_date.year,
-            "report_date": report_date,
-            "items": items,
-        })
-
-    # Return in chronological order (oldest first)
-    periods.sort(key=lambda p: p["report_date"])
-    return periods
-
-
-def _nearest_column(df: pd.DataFrame, target):
-    """Returns the DataFrame column closest in time to `target`."""
-    if df.columns.empty:
-        return None
-    diffs = [(abs((c - target).days), c) for c in df.columns]
-    diffs.sort(key=lambda x: x[0])
-    best_diff, best_col = diffs[0]
-    # Only accept if within 45 days
-    return best_col if best_diff <= 45 else None
-
-
-# ---------------------------------------------------------------------------
-# Fallback fixture (used when yfinance is unavailable / ticker is invalid)
-# ---------------------------------------------------------------------------
 
 def _get_fallback_data(ticker: str) -> Dict[str, Any]:
-    """Returns generic fixture quarterly data when live fetch fails."""
-    logger.info(f"Using fallback fixture data for '{ticker}'")
+    """Return deterministic quarterly data for offline ingestion failures."""
     return {
         "ticker": ticker,
         "name": f"{ticker} Corporation",
@@ -235,29 +159,38 @@ def _get_fallback_data(ticker: str) -> Dict[str, Any]:
             {
                 "period_type": "Q1", "fiscal_year": 2024,
                 "report_date": date(2023, 6, 30),
-                "items": {"revenue": 5100.0, "net_income": 980.0, "operating_income": 1200.0,
-                          "total_equity": 8800.0, "current_assets": 7100.0, "current_liabilities": 2800.0},
+                "items": {
+                    "revenue": 5100.0, "net_income": 980.0, "operating_income": 1200.0,
+                    "total_equity": 8800.0, "current_assets": 7100.0, "current_liabilities": 2800.0,
+                },
             },
             {
                 "period_type": "Q2", "fiscal_year": 2024,
                 "report_date": date(2023, 9, 30),
-                "items": {"revenue": 5250.0, "net_income": 1020.0, "operating_income": 1260.0,
-                          "total_equity": 9100.0, "current_assets": 7350.0, "current_liabilities": 2900.0},
+                "items": {
+                    "revenue": 5250.0, "net_income": 1020.0, "operating_income": 1260.0,
+                    "total_equity": 9100.0, "current_assets": 7350.0, "current_liabilities": 2900.0,
+                },
             },
             {
                 "period_type": "Q3", "fiscal_year": 2024,
                 "report_date": date(2023, 12, 31),
-                "items": {"revenue": 5380.0, "net_income": 1060.0, "operating_income": 1310.0,
-                          "total_equity": 9400.0, "current_assets": 7600.0, "current_liabilities": 2950.0},
+                "items": {
+                    "revenue": 5380.0, "net_income": 1060.0, "operating_income": 1310.0,
+                    "total_equity": 9400.0, "current_assets": 7600.0, "current_liabilities": 2950.0,
+                },
             },
             {
                 "period_type": "Q4", "fiscal_year": 2024,
                 "report_date": date(2024, 3, 31),
-                "items": {"revenue": 5520.0, "net_income": 1110.0, "operating_income": 1380.0,
-                          "total_equity": 9800.0, "current_assets": 7950.0, "current_liabilities": 3050.0},
+                "items": {
+                    "revenue": 5520.0, "net_income": 1110.0, "operating_income": 1380.0,
+                    "total_equity": 9800.0, "current_assets": 7950.0, "current_liabilities": 3050.0,
+                },
             },
         ],
     }
+
 
 
 # ---------------------------------------------------------------------------

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
     """Ingests quarterly financials for any publicly listed company into the database.
 
-    1. Fetches live data via yfinance (real data for any valid ticker).
+    1. Fetches live data from the SEC filing in a visible Chromium browser.
     2. Upserts Company, FinancialPeriod, and FinancialLineItem rows.
     3. Returns a summary status dict.
     """
@@ -23,7 +23,7 @@ def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
     logger.info(f"[Task {self.request.id}] Starting ingestion for ticker '{ticker_clean}'")
 
     try:
-        # Step 1: Fetch structured financial data (yfinance → fallback fixture)
+        # Step 1: Fetch structured financial data from SEC EDGAR.
         company_data = fetch_company_financials(ticker_clean)
         periods_data = company_data.get("periods", [])
 
@@ -85,13 +85,13 @@ def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
                             item_name=item_name,
                             value=val,
                             unit="USD (Millions)",
-                            source="yfinance",
+                            source="SEC filing",
                         )
                         session.add(line_item)
                     else:
                         # Always overwrite with the freshest value
                         line_item.value = val
-                        line_item.source = "yfinance"
+                        line_item.source = "SEC filing"
 
                 periods_count += 1
 

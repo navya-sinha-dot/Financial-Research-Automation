@@ -14,11 +14,9 @@ psycopg2-binary>=2.9.9
 celery>=5.3.6
 redis>=5.0.3
 
-# Data Scraping & Parsing
-beautifulsoup4>=4.12.3
+# SEC + Browser Automation
+playwright>=1.46.0
 requests>=2.31.0
-yfinance>=0.2.38
-tenacity>=8.2.3
 
 # Analytics & Reporting
 pandas>=2.2.1

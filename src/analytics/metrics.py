@@ -10,6 +10,7 @@ Contains pure mathematical and statistical computations for financial metrics:
 
 Contains NO database or UI dependencies.
 """
+import math
 from typing import Dict, List, Optional, Any
 import numpy as np
 import pandas as pd
@@ -189,6 +190,9 @@ def compute_peer_percentiles(
     results = []
     for idx, row in df.iterrows():
         comp_dict = dict(row)
+        for key, value in comp_dict.items():
+            if isinstance(value, (float, np.floating)) and not math.isfinite(float(value)):
+                comp_dict[key] = None
         percentiles = {}
         for m in metric_keys:
             val = rank_df.loc[idx, m]
