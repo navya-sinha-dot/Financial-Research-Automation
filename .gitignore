@@ -1,0 +1,39 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment configuration (never commit real secrets/config)
+.env
+.env.*
+!.env.example
+
+# Databases
+*.db
+*.sqlite3
+
+# Generated application data (scraped cache, debug artifacts, reports)
+data/cache/
+data/debug/
+data/raw/
+data/processed/
+data/reports/
+data/temp/
+
+# Playwright
+/test-results/
+/playwright-report/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+*.log

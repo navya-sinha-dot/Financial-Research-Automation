@@ -1,126 +1,153 @@
 # Financial Research Automation
 
-Financial Research Automation (FRA) is a Python-based SEC filing analysis pipeline that resolves companies, discovers the latest 10-Q/10-K filings, opens them in a visible Playwright + Chromium browser, extracts financial statement tables, normalizes the values, validates the result, and evaluates the company using financial analytics and charts.
+Financial Research Automation (FRA) is an end-to-end pipeline that scrapes real
+quarterly financial statements straight from **SEC EDGAR filings** using a live
+Chromium browser, normalizes and stores the extracted figures, computes
+financial ratios and peer benchmarks, and turns the result into an
+investor-grade PowerPoint report — all served through a FastAPI backend and a
+Streamlit dashboard.
 
-## Overview
-
-This project is deliberately moving away from the old Yahoo Finance-centric workflow and toward a browser-based SEC EDGAR pipeline. The main principles are:
-
-- SEC EDGAR is the primary financial data source.
-- Playwright + Chromium are used for the live browser scraping demonstration.
-- SEC API discovery is used for company lookup and filing metadata.
-- Financial values are normalized before analytics.
-- Data is traceable back to the filing and statement line item.
-- Demo mode opens a visible browser so the extraction process can be watched.
+There is no seeded, mocked, or synthetic financial data anywhere in the
+running application. Every number in the database was extracted from a real
+10-Q/10-K filing on `sec.gov`; if a scrape fails, the pipeline fails loudly
+instead of silently substituting fake figures.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    A[User] --> B[Ticker]
-    B --> C[SEC Filing Discovery]
-    C --> D[Find 10-Q / 10-K]
-    D --> E[Playwright]
-    E --> F[Chromium]
-    F --> G[SEC Filing HTML]
-    G --> H[Financial Parser]
-    H --> I[Normalization]
-    I --> J[Validation]
-    J --> K[Pandas]
-    K --> L[Financial Analytics]
-    L --> M[Charts]
-    L --> N[Streamlit]
-    L --> O[PowerPoint Report]
+    A[User enters a ticker] --> B[SEC company + CIK lookup]
+    B --> C[SEC filing discovery: latest 10-Q / 10-K]
+    C --> D[Playwright launches Chromium]
+    D --> E[Filing page opened in the browser]
+    E --> F[HTML tables located: income statement, balance sheet, cash flow]
+    F --> G[Parser extracts raw statement rows]
+    G --> H[Normalizer converts to numeric USD values]
+    H --> I[(PostgreSQL / SQLite via SQLAlchemy)]
+    I --> J[Pandas-based ratio engine: YoY, QoQ, margins, ROE, peer percentile]
+    J --> K[FastAPI REST layer]
+    K --> L[Streamlit dashboard]
+    K --> M[Celery worker renders PPTX investor report]
 ```
+
+## Why this stack
+
+- **SEC EDGAR** is the official, free, public source of company financial
+  statements — no paid market-data API keys required.
+- **Playwright + Chromium** perform real browser automation against the live
+  filing page, rather than an HTTP-only scrape, so the extraction is visible
+  and demonstrable step by step.
+- **FastAPI** is the only component allowed to touch the database; the
+  dashboard and the Celery workers talk to it exclusively over HTTP.
+- **Celery + Redis** decouple slow work (a live browser scrape, a multi-slide
+  PPTX render) from the request/response cycle.
+- **Pandas** computes every derived metric (YoY/QoQ growth, net margin, ROE,
+  current ratio, peer percentile ranking) from the normalized line items —
+  nothing is hardcoded.
 
 ## Data flow
 
-1. A company ticker is entered.
-2. SEC company lookup and filing discovery resolve the latest filing metadata.
-3. The browser opens the filing page in Chromium.
-4. The scraper locates the income statement, balance sheet, and cash flow tables.
-5. Raw values are parsed and normalized.
-6. Validation checks for missing/malformed data or suspicious balances.
-7. Pandas is used to compute finance metrics and trends.
-8. Charts and a PowerPoint report are generated.
+1. A ticker is submitted (via the dashboard, the API, or the CLI).
+2. `SECClient` resolves the company's CIK and looks up its most recent 10-Q
+   (falling back to 10-K) from `data.sec.gov`.
+3. Playwright launches Chromium and opens the filing document directly on
+   `sec.gov`.
+4. The scraper locates the income statement, balance sheet, and cash flow
+   statement tables in the rendered page and extracts every labeled row.
+5. The normalizer converts raw text (`"$(2,345)"`, `"$94,036 million"`, etc.)
+   into signed numeric USD values.
+6. Line items are upserted into the database under the correct company and
+   reporting period, derived from the filing's own reported period date.
+7. The analytics engine computes ratios and peer percentiles on demand.
+8. Charts (Matplotlib) and a 4-slide investor PPTX (python-pptx) are
+   generated asynchronously by a Celery worker.
 
-## Primary technology stack
+## CAPTCHA / anti-bot handling
 
-- Python
-- Playwright
-- Chromium
-- SEC EDGAR
-- Pandas
-- Matplotlib / Plotly
-- Streamlit
-- python-pptx
+The pipeline never attempts to bypass a CAPTCHA or access challenge. It
+detects one, saves a screenshot and the page HTML for debugging, and either
+pauses for a human to resolve it manually (demo mode) or fails the scrape
+outright (headless/automated mode).
 
-## Why SEC EDGAR
+## SEC rate-limit etiquette
 
-SEC EDGAR is the official public filing source for company financial statements. It offers a consistent and well-documented source for 10-Q and 10-K filings, and it does not depend on market-price wrappers like Yahoo Finance.
-
-## Why Playwright
-
-Playwright provides real browser automation and is suitable for demonstrating the physical extraction path visible in a live Chromium window. This matches the project requirement to show browser-based scraping rather than replacing it with a direct HTTP API-only approach.
+Every request carries a descriptive `User-Agent`, is throttled with a
+configurable delay, and successful responses are cached on disk so repeated
+lookups for the same ticker don't re-hit SEC servers unnecessarily.
 
 ## Installation
 
-Create a Python environment and install dependencies:
-
 ```bash
 python -m venv .venv
-. .venv/bin/activate  # Linux/macOS
-.venv\Scripts\activate  # Windows
+. .venv/bin/activate          # Linux/macOS
+.venv\Scripts\activate        # Windows
+
 pip install -r requirements.txt
 python -m playwright install chromium
 ```
 
 ## Environment variables
 
-Copy the example file and adjust values as needed:
-
 ```bash
 cp .env.example .env
 ```
 
-Key variables include:
+Set `SEC_USER_AGENT` to `AppName/Version your-email@example.com` — SEC EDGAR
+requires a descriptive, contactable user agent on every request.
 
-- SEC_USER_AGENT
-- SCRAPER_HEADLESS
-- SCRAPER_SLOW_MO
-- SCRAPER_TIMEOUT
-- DEBUG
-- SEC_REQUEST_DELAY
+Key variables:
 
-## Demo mode
+| Variable | Purpose |
+|---|---|
+| `SEC_USER_AGENT` | Required by SEC EDGAR on every request |
+| `SEC_REQUEST_DELAY` | Seconds between SEC requests (politeness throttle) |
+| `SCRAPER_HEADLESS` | `false` shows the live Chromium browser (demo mode) |
+| `SCRAPER_SLOW_MO` | Slows down browser actions for visible demos |
+| `DATABASE_URL` | SQLite by default; Postgres in Docker Compose |
+| `CELERY_TASK_ALWAYS_EAGER` | `true` runs Celery tasks synchronously (no Redis needed) for local dev |
+
+## Running the pipeline
+
+Scrape a single company end to end from the CLI:
 
 ```bash
-python scripts/run_pipeline.py AAPL --demo
+python scripts/run_pipeline.py AAPL --demo       # visible Chromium window
+python scripts/run_pipeline.py AAPL --headless   # no UI, for automation/CI
 ```
 
-This opens a visible Chromium browser and shows the filing being processed step by step.
-
-## Headless mode
+Start the full application (API + dashboard together):
 
 ```bash
-python scripts/run_pipeline.py AAPL --headless
+python scripts/start_app.py            # visible browser scraping
+python scripts/start_app.py --headless # headless scraping
 ```
 
-This runs without visible browser UI and is intended for automation and CI usage.
-
-## CLI usage
+Or run each service yourself:
 
 ```bash
-python scripts/scrape_company.py AAPL --demo
-python scripts/scrape_company.py AAPL --headless
-python scripts/run_pipeline.py AAPL --demo
-```
-
-## Streamlit dashboard
-
-```bash
+uvicorn src.api.main:app --reload
 streamlit run src/dashboard/app.py
 ```
+
+Once running, ingest a company from the dashboard sidebar or via the API:
+
+```bash
+curl -X POST http://localhost:8000/ingest -H "Content-Type: application/json" \
+  -d '{"ticker": "AAPL"}'
+```
+
+This is the only way data enters the database — there is no seed script.
+
+## Docker
+
+```bash
+docker compose up --build
+```
+
+Brings up PostgreSQL, Redis, the FastAPI API, a Celery worker, and the
+Streamlit dashboard. Database tables are created via Alembic migrations on
+startup; the database starts empty and is populated only by real ingestion
+requests.
 
 ## Testing
 
@@ -128,34 +155,37 @@ streamlit run src/dashboard/app.py
 python -m pytest tests/ -q
 ```
 
+Unit and integration tests cover the normalizer, parser, analytics engine,
+API routes, and PPTX/report generation. Network-dependent scraping is
+exercised against a local HTML fixture (`tests/fixtures/sec_filing_mock.html`)
+and by patching the ingestion entry point in isolation tests — this fixture
+data is used only inside the test suite and never reaches the running
+application or its database.
+
 ## Project structure
 
-- src/core — central config and logging
-- src/ingestion — SEC client, browser, discovery, scraper, parser, normalizer
-- src/analytics — financial analytics modules
-- src/reporting — charts, report generation, PPTX builder
-- src/dashboard — Streamlit app
-- data/ — raw, processed, cache, debug, reports
-
-## Debugging and screenshots
-
-The scraper writes debug artifacts into the data directory, including screenshots and HTML snapshots for failed pages and CAPTCHA detection.
-
-## CAPTCHA and access challenges
-
-The pipeline does not bypass CAPTCHA or anti-bot controls. Instead, it detects challenges, logs a warning, saves screenshots and HTML, and pauses in demo mode until the user completes the manual step.
-
-## SEC rate-limit considerations
-
-The project uses a descriptive User-Agent, request throttling, duplicate-request prevention, and cached metadata to avoid unnecessary SEC traffic.
-
-## Data provenance
-
-Every extracted value should be traceable to a filing, statement, and line item. The system keeps the raw values as well as normalized values so the source is visible in downstream reporting.
+```
+src/
+  core/        # settings, database engine, Celery app, logging
+  ingestion/   # SEC client, filing discovery, Playwright browser, scraper,
+               # HTML parser, value normalizer, Celery ingestion task
+  models/      # SQLAlchemy ORM models (Company, FinancialPeriod,
+               # FinancialLineItem, ComputedRatio, ReportJob)
+  schemas/     # Pydantic request/response models
+  analytics/   # Pure, dependency-free financial ratio + percentile math
+  reporting/   # Matplotlib charts, python-pptx report builder, Celery task
+  api/         # FastAPI app and routers (companies, compare, reports, ingest)
+  dashboard/   # Streamlit executive dashboard + API client
+alembic/       # Database migrations
+scripts/       # CLI entry points (run_pipeline.py, start_app.py)
+tests/         # pytest suite
+```
 
 ## Limitations
 
-- SEC filing structure can change over time.
-- Some HTML layouts require statement-specific parsing logic.
-- Live browser-based scraping should be used carefully and in compliance with SEC and site policies.
-- CAPTCHA or anti-bot checks require manual intervention in demo mode.
+- SEC filing HTML structure varies by filer and can change over time; some
+  filings may need statement-specific parsing adjustments.
+- A CAPTCHA or access challenge requires manual resolution in demo mode, or
+  causes the scrape to fail safely in headless mode.
+- Live browser scraping should be run respectfully and in compliance with
+  SEC's fair-access policy (descriptive User-Agent, request throttling).
