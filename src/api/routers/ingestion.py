@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, status
 from pydantic import BaseModel
+
 from src.core.config import settings
 from src.ingestion.tasks import ingest_company_financials
 

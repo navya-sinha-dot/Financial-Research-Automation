@@ -4,9 +4,7 @@ import hashlib
 import json
 import logging
 import time
-from functools import lru_cache
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 
@@ -22,7 +20,7 @@ class SECClientError(RuntimeError):
 
 class SECClient:
     def __init__(self, user_agent: str | None = None):
-        self.user_agent = user_agent or getattr(settings, "SEC_USER_AGENT", DEFAULT_SEC_USER_AGENT)
+        self.user_agent: str = user_agent or str(getattr(settings, "SEC_USER_AGENT", DEFAULT_SEC_USER_AGENT))
         self.base_url = "https://www.sec.gov"
         self._last_request: float = 0.0
         self._cache_dir = CACHE_DIR
@@ -47,7 +45,7 @@ class SECClient:
         digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
         return f"{digest}.json"
 
-    def _read_cache(self, url: str) -> Optional[Dict[str, Any]]:
+    def _read_cache(self, url: str) -> dict[str, Any] | None:
         cache_file = self._cache_dir / self._cache_key(url)
         if not cache_file.exists():
             return None
@@ -58,11 +56,11 @@ class SECClient:
         except Exception:
             return None
 
-    def _write_cache(self, url: str, payload: Dict[str, Any]) -> None:
+    def _write_cache(self, url: str, payload: dict[str, Any]) -> None:
         cache_file = self._cache_dir / self._cache_key(url)
         cache_file.write_text(json.dumps(payload, default=str), encoding="utf-8")
 
-    def company_search(self, ticker: str) -> Dict[str, Any]:
+    def company_search(self, ticker: str) -> dict[str, Any]:
         ticker = ticker.upper().strip()
         cache_key = f"https://www.sec.gov/cgi-bin/browse-edgar?CIK={ticker}&owner=exclude&action=getcompany&match=&start=0&count=20"
         cached = self._read_cache(cache_key)
@@ -92,7 +90,7 @@ class SECClient:
                 return f"{int(company['cik_str']):010d}"
         raise SECClientError(f"Could not find SEC CIK for ticker {ticker}.")
 
-    def filing_metadata(self, ticker: str, filing_type: str = "10-Q") -> Dict[str, Any]:
+    def filing_metadata(self, ticker: str, filing_type: str = "10-Q") -> dict[str, Any]:
         cik = self.cik_lookup(ticker)
         url = f"https://data.sec.gov/submissions/CIK{cik}.json"
         cached = self._read_cache(url)

@@ -2,7 +2,7 @@
 
 Built with Streamlit. Communicates with the database EXCLUSIVELY via the FastAPI REST API.
 """
-import os
+
 import sys
 from pathlib import Path
 
@@ -12,7 +12,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 import time
-from typing import Dict, Any, List, Optional
+
 import pandas as pd
 import streamlit as st
 
@@ -128,12 +128,14 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
 # -----------------------------------------------------------------------------
 # Initialize API Client
 # -----------------------------------------------------------------------------
 @st.cache_resource
 def get_api_client() -> FRAApiClient:
     return FRAApiClient()
+
 
 client = get_api_client()
 
@@ -155,7 +157,7 @@ selected_label = st.sidebar.selectbox(
     index=0 if company_options else None,
 )
 
-selected_company = company_options.get(selected_label) if company_options else None
+selected_company = company_options.get(selected_label) if company_options and selected_label else None
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚡ Live Data Ingestion")
@@ -166,7 +168,8 @@ if st.sidebar.button("Fetch & Ingest Ticker", use_container_width=True):
         with st.sidebar.status(f"Triggering ingestion for {new_ticker}..."):
             ingest_res = client.trigger_ingestion(new_ticker)
             if ingest_res and ingest_res.get("status") in ("QUEUED", "SUCCESS"):
-                st.sidebar.success(f"SEC scrape complete. Task ID: {ingest_res.get('task_id')[:8]}")
+                task_id = str(ingest_res.get("task_id", ""))
+                st.sidebar.success(f"SEC scrape complete. Task ID: {task_id[:8]}")
                 time.sleep(1)
                 st.rerun()
             else:
@@ -193,8 +196,11 @@ st.sidebar.markdown(
 # Main Application Content
 # -----------------------------------------------------------------------------
 if not selected_company:
-    st.info("👋 Welcome to Financial Research Automation. Please select or ingest a company using the sidebar to begin.")
+    st.info(
+        "👋 Welcome to Financial Research Automation. Please select or ingest a company using the sidebar to begin."
+    )
     st.stop()
+assert selected_company is not None  # st.stop() halts the script above; this is for the type checker
 
 # Fetch company financials and computed ratios via API
 comp_id = selected_company["id"]
@@ -229,7 +235,7 @@ with hero_col1:
 with hero_col2:
     st.markdown("### 📊 Investor Report")
     st.caption("Generate institutional 4-slide PowerPoint (.pptx) deck:")
-    
+
     # Session state for active report job
     if f"report_job_{comp_id}" not in st.session_state:
         st.session_state[f"report_job_{comp_id}"] = None
@@ -276,7 +282,7 @@ with hero_col2:
 if periods:
     latest_p = periods[-1]
     latest_items = {item["item_name"]: item["value"] for item in latest_p.get("line_items", [])}
-    
+
     # Pull latest ratios
     ratios_list = ratios_data.get("ratios_by_period", []) if ratios_data else []
     latest_ratios = ratios_list[-1].get("computed_ratios", {}) if ratios_list else {}
@@ -289,7 +295,7 @@ if periods:
     yoy = latest_ratios.get("yoy_growth")
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    
+
     with c1:
         st.markdown(
             f"""
@@ -359,12 +365,14 @@ st.markdown("<br/>", unsafe_allow_html=True)
 # -----------------------------------------------------------------------------
 # Multi-Tab Analytics View
 # -----------------------------------------------------------------------------
-tab_trend, tab_ratios, tab_peer, tab_tables = st.tabs([
-    "📈 Financial Trajectory",
-    "🎯 Ratio & Margin Dynamics",
-    "👥 Peer Benchmark Ranking",
-    "📋 Financial Statements (Line Items)",
-])
+tab_trend, tab_ratios, tab_peer, tab_tables = st.tabs(
+    [
+        "📈 Financial Trajectory",
+        "🎯 Ratio & Margin Dynamics",
+        "👥 Peer Benchmark Ranking",
+        "📋 Financial Statements (Line Items)",
+    ]
+)
 
 # Build DataFrame of all periods
 period_rows = []
@@ -403,16 +411,26 @@ with tab_ratios:
         for r in ratios_by_period:
             p_label = f"{r.get('period_type')} {r.get('fiscal_year')}"
             comp = r.get("computed_ratios", {})
-            ratio_rows.append({
-                "Period": p_label,
-                "Net Margin (%)": round(comp.get("net_margin", 0.0) * 100, 2) if comp.get("net_margin") is not None else None,
-                "ROE (%)": round(comp.get("roe", 0.0) * 100, 2) if comp.get("roe") is not None else None,
-                "Current Ratio (x)": round(comp.get("current_ratio", 0.0), 2) if comp.get("current_ratio") is not None else None,
-                "YoY Revenue Growth (%)": round(comp.get("yoy_growth", 0.0) * 100, 2) if comp.get("yoy_growth") is not None else None,
-                "QoQ Revenue Growth (%)": round(comp.get("qoq_growth", 0.0) * 100, 2) if comp.get("qoq_growth") is not None else None,
-            })
+            ratio_rows.append(
+                {
+                    "Period": p_label,
+                    "Net Margin (%)": (
+                        round(comp.get("net_margin", 0.0) * 100, 2) if comp.get("net_margin") is not None else None
+                    ),
+                    "ROE (%)": round(comp.get("roe", 0.0) * 100, 2) if comp.get("roe") is not None else None,
+                    "Current Ratio (x)": (
+                        round(comp.get("current_ratio", 0.0), 2) if comp.get("current_ratio") is not None else None
+                    ),
+                    "YoY Revenue Growth (%)": (
+                        round(comp.get("yoy_growth", 0.0) * 100, 2) if comp.get("yoy_growth") is not None else None
+                    ),
+                    "QoQ Revenue Growth (%)": (
+                        round(comp.get("qoq_growth", 0.0) * 100, 2) if comp.get("qoq_growth") is not None else None
+                    ),
+                }
+            )
         df_ratios = pd.DataFrame(ratio_rows)
-        
+
         col_c1, col_c2 = st.columns(2)
         with col_c1:
             st.markdown("#### Profitability Margins (Net Margin vs ROE)")
@@ -420,7 +438,7 @@ with tab_ratios:
         with col_c2:
             st.markdown("#### Liquidity & Growth")
             st.line_chart(df_ratios.set_index("Period")[["Current Ratio (x)"]], height=320)
-            
+
         st.dataframe(df_ratios, use_container_width=True, hide_index=True)
     else:
         st.info("No ratios computed yet.")
@@ -436,17 +454,19 @@ with tab_peer:
             peer_table_rows = []
             for pc in peer_comps:
                 pct = pc.get("percentile_rankings", {})
-                peer_table_rows.append({
-                    "Ticker": pc.get("ticker"),
-                    "Company Name": pc.get("name"),
-                    "Latest Revenue ($M)": round(pc.get("latest_revenue") or 0.0, 1),
-                    "Net Margin (%)": round((pc.get("net_margin") or 0.0) * 100, 2),
-                    "ROE (%)": round((pc.get("roe") or 0.0) * 100, 2),
-                    "Current Ratio (x)": round(pc.get("current_ratio") or 0.0, 2),
-                    "Net Margin Percentile Rank": f"{pct.get('net_margin', 0.0):.0f}th percentile",
-                })
+                peer_table_rows.append(
+                    {
+                        "Ticker": pc.get("ticker"),
+                        "Company Name": pc.get("name"),
+                        "Latest Revenue ($M)": round(pc.get("latest_revenue") or 0.0, 1),
+                        "Net Margin (%)": round((pc.get("net_margin") or 0.0) * 100, 2),
+                        "ROE (%)": round((pc.get("roe") or 0.0) * 100, 2),
+                        "Current Ratio (x)": round(pc.get("current_ratio") or 0.0, 2),
+                        "Net Margin Percentile Rank": f"{pct.get('net_margin', 0.0):.0f}th percentile",
+                    }
+                )
             df_peers = pd.DataFrame(peer_table_rows)
-            
+
             # Highlight target company
             st.dataframe(df_peers, use_container_width=True, hide_index=True)
 

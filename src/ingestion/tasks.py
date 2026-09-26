@@ -1,18 +1,19 @@
 """Celery ingestion tasks with failure isolation and structured logging."""
+
 import logging
-from typing import Dict, Any, List
+from typing import Any
 
 from src.core.celery_app import celery_app
 from src.core.database import SessionLocal
-from src.models.company import Company
-from src.models.financial import FinancialPeriod, FinancialLineItem
 from src.ingestion.scraper import fetch_company_financials
+from src.models.company import Company
+from src.models.financial import FinancialLineItem, FinancialPeriod
 
 logger = logging.getLogger(__name__)
 
 
 @celery_app.task(bind=True, name="src.ingestion.tasks.ingest_company_financials")
-def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
+def ingest_company_financials(self, ticker: str) -> dict[str, Any]:
     """Ingests quarterly financials for any publicly listed company into the database.
 
     1. Fetches live data from the SEC filing in a visible Chromium browser.
@@ -75,9 +76,7 @@ def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
 
                 for item_name, val in p_dict.get("items", {}).items():
                     line_item = (
-                        session.query(FinancialLineItem)
-                        .filter_by(period_id=period.id, item_name=item_name)
-                        .first()
+                        session.query(FinancialLineItem).filter_by(period_id=period.id, item_name=item_name).first()
                     )
                     if not line_item:
                         line_item = FinancialLineItem(
@@ -97,8 +96,7 @@ def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
 
             session.commit()
             logger.info(
-                f"[Task {self.request.id}] Ingested {periods_count} periods for "
-                f"'{ticker_clean}' ({company.name})"
+                f"[Task {self.request.id}] Ingested {periods_count} periods for " f"'{ticker_clean}' ({company.name})"
             )
             return {
                 "ticker": ticker_clean,
@@ -124,7 +122,7 @@ def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
 
 
 @celery_app.task(name="src.ingestion.tasks.ingest_batch_companies")
-def ingest_batch_companies(tickers: List[str]) -> Dict[str, Any]:
+def ingest_batch_companies(tickers: list[str]) -> dict[str, Any]:
     """Batch ingestion with failure isolation.
 
     A failure on any single ticker does NOT stop the rest of the batch.

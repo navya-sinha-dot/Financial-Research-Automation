@@ -1,18 +1,17 @@
 """SEC filing scraper built around Playwright and Chromium."""
+
 from __future__ import annotations
 
 import logging
 import re
 from datetime import date
-from typing import Any, Dict, Iterable
+from typing import Any
 
 from src.core.config import settings
-from src.core.constants import DEBUG_DIR
-from src.ingestion.browser import create_page, save_debug_html, save_debug_screenshot, close_browser
+from src.ingestion.browser import close_browser, create_page, save_debug_html, save_debug_screenshot
 from src.ingestion.captcha_handler import handle_captcha
 from src.ingestion.filing_discovery import discover_latest_filing
 from src.ingestion.normalizer import normalize_financial_value
-from src.ingestion.parser import parse_financial_statements
 
 logger = logging.getLogger(__name__)
 
@@ -36,17 +35,22 @@ def wait_for_filing(page, *, timeout: int = 30000) -> None:
 def locate_income_statement(page):
     locator = page.locator("text=CONSOLIDATED STATEMENTS OF OPERATIONS")
     if locator.count() > 0:
-        logger.info("[BROWSER] searching for \"CONSOLIDATED STATEMENTS OF OPERATIONS\"")
+        logger.info('[BROWSER] searching for "CONSOLIDATED STATEMENTS OF OPERATIONS"')
         return True
     return False
 
 
 def locate_balance_sheet(page):
-    return page.locator("text=CONSOLIDATED BALANCE SHEETS").count() > 0 or page.locator("text=BALANCE SHEET").count() > 0
+    return (
+        page.locator("text=CONSOLIDATED BALANCE SHEETS").count() > 0 or page.locator("text=BALANCE SHEET").count() > 0
+    )
 
 
 def locate_cash_flow_statement(page):
-    return page.locator("text=CONSOLIDATED STATEMENTS OF CASH FLOWS").count() > 0 or page.locator("text=CASH FLOW").count() > 0
+    return (
+        page.locator("text=CONSOLIDATED STATEMENTS OF CASH FLOWS").count() > 0
+        or page.locator("text=CASH FLOW").count() > 0
+    )
 
 
 def extract_table(page, table_text_hint: str):
@@ -60,10 +64,10 @@ def extract_table(page, table_text_hint: str):
     raise ValueError(f"Could not locate table for {table_text_hint}.")
 
 
-def extract_financial_rows(page, table_text_hint: str) -> Dict[str, Any]:
+def extract_financial_rows(page, table_text_hint: str) -> dict[str, Any]:
     table_html = extract_table(page, table_text_hint)
     rows = re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, flags=re.IGNORECASE | re.DOTALL)
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
     for row in rows:
         cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, flags=re.IGNORECASE | re.DOTALL)
         if len(cells) < 2:
@@ -81,7 +85,7 @@ def extract_financial_value(raw_text: str) -> float | None:
     return normalize_financial_value(raw_text)
 
 
-def scrape_filing(ticker: str, filing_url: str, *, demo: bool = False) -> Dict[str, Any]:
+def scrape_filing(ticker: str, filing_url: str, *, demo: bool = False) -> dict[str, Any]:
     logger.info("[1/10] Resolving company")
     info = discover_latest_filing(ticker)
     logger.info("[OK] %s", info["company_name"])
@@ -97,7 +101,7 @@ def scrape_filing(ticker: str, filing_url: str, *, demo: bool = False) -> Dict[s
     wait_for_filing(page)
     logger.info("[OK] Filing loaded")
 
-    statements: Dict[str, Dict[str, Any]] = {"income_statement": {}, "balance_sheet": {}, "cash_flow": {}}
+    statements: dict[str, dict[str, Any]] = {"income_statement": {}, "balance_sheet": {}, "cash_flow": {}}
 
     for step_name, hint, key in [
         ("[5/10] Scraping Income Statement", "CONSOLIDATED STATEMENTS OF OPERATIONS", "income_statement"),
@@ -113,7 +117,9 @@ def scrape_filing(ticker: str, filing_url: str, *, demo: bool = False) -> Dict[s
             if normalized is not None:
                 statements[key][label] = normalized
         logger.info("[OK] %s extracted", key.replace("_", " ").title())
-        save_debug_screenshot(f"{key}.png" if key in {"income_statement", "balance_sheet", "cash_flow"} else "debug.png", page)
+        save_debug_screenshot(
+            f"{key}.png" if key in {"income_statement", "balance_sheet", "cash_flow"} else "debug.png", page
+        )
 
     html = page.content()
     save_debug_html("filing_content.html", html)
@@ -135,7 +141,7 @@ def _infer_period(period_of_report: str) -> tuple[str, int]:
     return f"Q{quarter}", report_date.year
 
 
-def fetch_company_financials(ticker: str) -> Dict[str, Any]:
+def fetch_company_financials(ticker: str) -> dict[str, Any]:
     """Compatibility wrapper for the old ingestion API.
 
     Scrapes the company's latest SEC filing and returns it in the shape the
@@ -148,14 +154,16 @@ def fetch_company_financials(ticker: str) -> Dict[str, Any]:
     return {
         "ticker": ticker.upper(),
         "name": filing["company_name"],
-        "periods": [{
-            "period_type": period_type,
-            "fiscal_year": fiscal_year,
-            "report_date": filing["period_of_report"],
-            "items": {
-                **result["statements"].get("income_statement", {}),
-                **result["statements"].get("balance_sheet", {}),
-                **result["statements"].get("cash_flow", {}),
-            },
-        }],
+        "periods": [
+            {
+                "period_type": period_type,
+                "fiscal_year": fiscal_year,
+                "report_date": filing["period_of_report"],
+                "items": {
+                    **result["statements"].get("income_statement", {}),
+                    **result["statements"].get("balance_sheet", {}),
+                    **result["statements"].get("cash_flow", {}),
+                },
+            }
+        ],
     }

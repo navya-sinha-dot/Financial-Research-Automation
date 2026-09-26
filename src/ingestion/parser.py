@@ -1,10 +1,11 @@
 """SEC EDGAR HTML parser for quarterly financial statements."""
+
 from __future__ import annotations
 
 import html
 import logging
 import re
-from typing import Any, Dict, Iterable
+from typing import Any
 
 from src.ingestion.normalizer import normalize_statement_rows
 
@@ -20,19 +21,50 @@ def _clean_cell_text(value: str) -> str:
 
 def _statement_target_for_row(label: str) -> str:
     label_l = label.lower()
-    if any(term in label_l for term in ["revenue", "cost of revenue", "gross profit", "operating income", "net income", "basic eps", "diluted eps"]):
+    if any(
+        term in label_l
+        for term in [
+            "revenue",
+            "cost of revenue",
+            "gross profit",
+            "operating income",
+            "net income",
+            "basic eps",
+            "diluted eps",
+        ]
+    ):
         return "income_statement"
-    if any(term in label_l for term in ["cash and cash", "current assets", "total assets", "current liabilities", "total liabilities", "shareholders' equity", "total debt"]):
+    if any(
+        term in label_l
+        for term in [
+            "cash and cash",
+            "current assets",
+            "total assets",
+            "current liabilities",
+            "total liabilities",
+            "shareholders' equity",
+            "total debt",
+        ]
+    ):
         return "balance_sheet"
-    if any(term in label_l for term in ["operating cash flow", "capital expenditure", "investing cash flow", "financing cash flow", "free cash flow"]):
+    if any(
+        term in label_l
+        for term in [
+            "operating cash flow",
+            "capital expenditure",
+            "investing cash flow",
+            "financing cash flow",
+            "free cash flow",
+        ]
+    ):
         return "cash_flow"
     return "income_statement"
 
 
-def parse_financial_statements(html_content: str) -> Dict[str, Dict[str, Any]]:
+def parse_financial_statements(html_content: str) -> dict[str, dict[str, Any]]:
     """Extract a normalized set of SEC financial statements from filing HTML."""
     tables = re.findall(r"<table[^>]*>(.*?)</table>", html_content, flags=re.IGNORECASE | re.DOTALL)
-    statements: Dict[str, Dict[str, Any]] = {"income_statement": {}, "balance_sheet": {}, "cash_flow": {}}
+    statements: dict[str, dict[str, Any]] = {"income_statement": {}, "balance_sheet": {}, "cash_flow": {}}
 
     for table_html in tables:
         rows = re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, flags=re.IGNORECASE | re.DOTALL)
@@ -55,6 +87,6 @@ def parse_financial_statements(html_content: str) -> Dict[str, Dict[str, Any]]:
     return normalized
 
 
-def parse_quarterly_financials_html(html_content: str) -> Dict[str, Any]:
+def parse_quarterly_financials_html(html_content: str) -> dict[str, Any]:
     """Compatibility wrapper for older ingestion callers."""
     return parse_financial_statements(html_content)

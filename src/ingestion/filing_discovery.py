@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import logging
-import re
-from typing import Any, Dict, Optional
+from typing import Any
 
 from src.ingestion.sec_client import SECClient, SECClientError
 
 logger = logging.getLogger(__name__)
 
 
-def discover_latest_filing(ticker: str, filing_type: str = "10-Q") -> Dict[str, Any]:
+def discover_latest_filing(ticker: str, filing_type: str = "10-Q") -> dict[str, Any]:
     ticker = ticker.upper().strip()
     if not ticker:
         raise SECClientError("Ticker is required to discover a filing.")

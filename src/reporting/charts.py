@@ -1,8 +1,11 @@
 """Matplotlib financial charts generator for FRA investor reports."""
+
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any
+
 import matplotlib
+
 matplotlib.use("Agg")  # Non-interactive backend for headless server/worker
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,15 +13,15 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # Professional palette
-COLOR_PRIMARY = "#1E40AF"    # Deep Royal Blue
+COLOR_PRIMARY = "#1E40AF"  # Deep Royal Blue
 COLOR_SECONDARY = "#0D9488"  # Teal
-COLOR_ACCENT = "#F59E0B"     # Amber
+COLOR_ACCENT = "#F59E0B"  # Amber
 COLOR_HIGHLIGHT = "#6366F1"  # Indigo
-COLOR_BG = "#F8FAFC"         # Soft slate background
+COLOR_BG = "#F8FAFC"  # Soft slate background
 
 
 def generate_revenue_trend_chart(
-    periods_data: List[Dict[str, Any]],
+    periods_data: list[dict[str, Any]],
     output_path: Path,
 ) -> Path:
     """Generates a high-resolution chart showing Revenue and Net Income quarterly trend."""
@@ -34,8 +37,10 @@ def generate_revenue_trend_chart(
     ax1.set_facecolor(COLOR_BG)
 
     # Bar chart for revenue
-    rects1 = ax1.bar(x - width/2, revenues, width, label="Revenue ($M)", color=COLOR_PRIMARY, edgecolor="none", alpha=0.9)
-    rects2 = ax1.bar(x + width/2, net_incomes, width, label="Net Income ($M)", color=COLOR_SECONDARY, edgecolor="none", alpha=0.9)
+    ax1.bar(x - width / 2, revenues, width, label="Revenue ($M)", color=COLOR_PRIMARY, edgecolor="none", alpha=0.9)
+    ax1.bar(
+        x + width / 2, net_incomes, width, label="Net Income ($M)", color=COLOR_SECONDARY, edgecolor="none", alpha=0.9
+    )
 
     ax1.set_ylabel("USD (Millions)", fontsize=11, fontweight="bold", color="#1F2937")
     ax1.set_title("Quarterly Revenue & Net Income Trajectory", fontsize=13, fontweight="bold", pad=15, color="#111827")
@@ -57,12 +62,12 @@ def generate_revenue_trend_chart(
 
 
 def generate_margins_chart(
-    periods_data: List[Dict[str, Any]],
+    periods_data: list[dict[str, Any]],
     output_path: Path,
 ) -> Path:
     """Generates a line chart showing Net Margin and ROE progression."""
     labels = [f"{p.get('period_type', '')} '{str(p.get('fiscal_year', ''))[-2:]}" for p in periods_data]
-    
+
     net_margins = []
     roes = []
     for p in periods_data:
@@ -80,7 +85,9 @@ def generate_margins_chart(
     ax.plot(labels, roes, marker="s", linewidth=2.5, color=COLOR_ACCENT, label="Return on Equity (%)")
 
     ax.set_ylabel("Percentage (%)", fontsize=11, fontweight="bold", color="#1F2937")
-    ax.set_title("Profitability & Return Dynamics (Net Margin vs ROE)", fontsize=13, fontweight="bold", pad=15, color="#111827")
+    ax.set_title(
+        "Profitability & Return Dynamics (Net Margin vs ROE)", fontsize=13, fontweight="bold", pad=15, color="#111827"
+    )
     ax.legend(frameon=True, facecolor="#FFFFFF", edgecolor="#E5E7EB", fontsize=10)
     ax.grid(True, linestyle="--", alpha=0.5, color="#CBD5E1")
     ax.set_axisbelow(True)
@@ -96,7 +103,7 @@ def generate_margins_chart(
 
 
 def generate_peer_comparison_chart(
-    companies_data: List[Dict[str, Any]],
+    companies_data: list[dict[str, Any]],
     target_ticker: str,
     output_path: Path,
 ) -> Path:
@@ -104,10 +111,7 @@ def generate_peer_comparison_chart(
     tickers = [c["ticker"] for c in companies_data]
     margins = [(c.get("net_margin") or 0.0) * 100 for c in companies_data]
 
-    colors = [
-        COLOR_PRIMARY if t.upper() == target_ticker.upper() else "#94A3B8"
-        for t in tickers
-    ]
+    colors = [COLOR_PRIMARY if t.upper() == target_ticker.upper() else "#94A3B8" for t in tickers]
 
     fig, ax = plt.subplots(figsize=(8, 4.5), dpi=200)
     fig.patch.set_facecolor("#FFFFFF")
@@ -120,7 +124,13 @@ def generate_peer_comparison_chart(
     ax.set_yticklabels(tickers, fontsize=11, fontweight="bold", color="#1F2937")
     ax.invert_yaxis()  # top-down ranking
     ax.set_xlabel("Net Margin (%)", fontsize=11, fontweight="bold", color="#1F2937")
-    ax.set_title(f"Peer Net Margin Comparison (Highlight: {target_ticker})", fontsize=13, fontweight="bold", pad=15, color="#111827")
+    ax.set_title(
+        f"Peer Net Margin Comparison (Highlight: {target_ticker})",
+        fontsize=13,
+        fontweight="bold",
+        pad=15,
+        color="#111827",
+    )
     ax.grid(axis="x", linestyle="--", alpha=0.5, color="#CBD5E1")
     ax.set_axisbelow(True)
 

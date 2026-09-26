@@ -1,5 +1,5 @@
 from datetime import date
-from typing import List, Optional, Dict
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -7,8 +7,8 @@ class LineItemResponse(BaseModel):
     id: int
     item_name: str
     value: float
-    unit: Optional[str] = "USD"
-    source: Optional[str] = "scraper"
+    unit: str | None = "USD"
+    source: str | None = "scraper"
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -27,8 +27,8 @@ class FinancialPeriodResponse(BaseModel):
     period_type: str
     fiscal_year: int
     report_date: date
-    line_items: List[LineItemResponse] = []
-    computed_ratios: List[ComputedRatioResponse] = []
+    line_items: list[LineItemResponse] = []
+    computed_ratios: list[ComputedRatioResponse] = []
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -37,6 +37,6 @@ class CompanyFinancialsResponse(BaseModel):
     company_id: int
     ticker: str
     name: str
-    periods: List[FinancialPeriodResponse]
+    periods: list[FinancialPeriodResponse]
 
     model_config = ConfigDict(from_attributes=True)
