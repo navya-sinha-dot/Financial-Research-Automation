@@ -1,6 +1,7 @@
 """Celery report generation task communicating with the database EXCLUSIVELY via the FastAPI API."""
 import os
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -8,6 +9,7 @@ import httpx
 
 from src.core.celery_app import celery_app
 from src.core.config import settings
+from src.core.metrics import REPORT_GENERATION_DURATION_SECONDS, REPORT_GENERATION_TOTAL
 from src.reporting.charts import (
     generate_revenue_trend_chart,
     generate_margins_chart,
@@ -60,6 +62,7 @@ def generate_report_task(self, job_id: int, company_id: int) -> Dict[str, Any]:
     Talks to the database ONLY via FastAPI endpoints.
     """
     logger.info(f"[Task {self.request.id}] Starting PPTX report generation for Job #{job_id}, Company #{company_id}")
+    _started_at = time.monotonic()
 
     try:
         # Step 1: Update job status to PROCESSING via API
@@ -145,6 +148,8 @@ def generate_report_task(self, job_id: int, company_id: int) -> Dict[str, Any]:
             except Exception:
                 pass
 
+        REPORT_GENERATION_TOTAL.labels(status="COMPLETED").inc()
+        REPORT_GENERATION_DURATION_SECONDS.observe(time.monotonic() - _started_at)
         return {
             "job_id": job_id,
             "status": "COMPLETED",
@@ -164,4 +169,6 @@ def generate_report_task(self, job_id: int, company_id: int) -> Dict[str, Any]:
             )
         except Exception:
             pass
+        REPORT_GENERATION_TOTAL.labels(status="FAILED").inc()
+        REPORT_GENERATION_DURATION_SECONDS.observe(time.monotonic() - _started_at)
         return {"job_id": job_id, "status": "FAILED", "error": str(exc)}

@@ -1,9 +1,11 @@
 """Celery ingestion tasks with failure isolation and structured logging."""
 import logging
+import time
 from typing import Dict, Any, List
 
 from src.core.celery_app import celery_app
 from src.core.database import SessionLocal
+from src.core.metrics import INGESTION_DURATION_SECONDS, INGESTION_TOTAL
 from src.models.company import Company
 from src.models.financial import FinancialPeriod, FinancialLineItem
 from src.ingestion.scraper import fetch_company_financials
@@ -21,6 +23,7 @@ def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
     """
     ticker_clean = ticker.upper().strip()
     logger.info(f"[Task {self.request.id}] Starting ingestion for ticker '{ticker_clean}'")
+    _started_at = time.monotonic()
 
     try:
         # Step 1: Fetch structured financial data from SEC EDGAR.
@@ -29,6 +32,8 @@ def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
 
         if not periods_data:
             logger.warning(f"No financial periods returned for {ticker_clean}")
+            INGESTION_TOTAL.labels(status="NO_DATA").inc()
+            INGESTION_DURATION_SECONDS.observe(time.monotonic() - _started_at)
             return {"ticker": ticker_clean, "status": "NO_DATA", "periods_ingested": 0}
 
         # Step 2: Upsert into database
@@ -100,6 +105,8 @@ def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
                 f"[Task {self.request.id}] Ingested {periods_count} periods for "
                 f"'{ticker_clean}' ({company.name})"
             )
+            INGESTION_TOTAL.labels(status="SUCCESS").inc()
+            INGESTION_DURATION_SECONDS.observe(time.monotonic() - _started_at)
             return {
                 "ticker": ticker_clean,
                 "company_id": company.id,
@@ -120,6 +127,8 @@ def ingest_company_financials(self, ticker: str) -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"Ingestion failed for '{ticker_clean}': {e}", exc_info=True)
+        INGESTION_TOTAL.labels(status="FAILED").inc()
+        INGESTION_DURATION_SECONDS.observe(time.monotonic() - _started_at)
         return {"ticker": ticker_clean, "status": "FAILED", "error": str(e)}
 
 

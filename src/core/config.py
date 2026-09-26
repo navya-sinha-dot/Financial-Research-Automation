@@ -12,6 +12,7 @@ class Settings(BaseSettings):
 
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"
+    LOG_JSON: bool = True
     DEBUG: bool = True
 
     SEC_USER_AGENT: str = "FinancialResearchAutomation/1.0 contact@example.com"
@@ -25,6 +26,8 @@ class Settings(BaseSettings):
     SCRAPER_SAVE_HTML: bool = True
 
     DATABASE_URL: str = "sqlite:///./data/fra.db"
+
+    CACHE_TTL_SECONDS: int = 60
 
     REDIS_URL: str = "redis://localhost:6379/0"
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
