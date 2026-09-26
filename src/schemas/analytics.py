@@ -1,25 +1,24 @@
-from typing import List, Dict, Optional, Any
 from pydantic import BaseModel
 
 
 class CompareRequest(BaseModel):
-    company_ids: List[int]
+    company_ids: list[int]
 
 
 class CompanyMetricSummary(BaseModel):
     company_id: int
     ticker: str
     name: str
-    latest_revenue: Optional[float] = None
-    latest_net_income: Optional[float] = None
-    yoy_growth: Optional[float] = None
-    qoq_growth: Optional[float] = None
-    net_margin: Optional[float] = None
-    roe: Optional[float] = None
-    current_ratio: Optional[float] = None
-    percentile_rankings: Dict[str, float] = {}
+    latest_revenue: float | None = None
+    latest_net_income: float | None = None
+    yoy_growth: float | None = None
+    qoq_growth: float | None = None
+    net_margin: float | None = None
+    roe: float | None = None
+    current_ratio: float | None = None
+    percentile_rankings: dict[str, float] = {}
 
 
 class PeerCompareResponse(BaseModel):
-    companies: List[CompanyMetricSummary]
-    summary_stats: Dict[str, Dict[str, float]] = {}
+    companies: list[CompanyMetricSummary]
+    summary_stats: dict[str, dict[str, float]] = {}

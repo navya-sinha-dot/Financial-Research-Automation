@@ -1,12 +1,12 @@
 import logging
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.routers import companies, compare, ingestion, reports
 from src.core.config import settings
-from src.core.database import engine, Base
-import src.models  # Register all models
-from src.api.routers import companies, compare, reports, ingestion
+from src.core.database import Base, engine
 
 logging.basicConfig(level=settings.LOG_LEVEL, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -24,7 +24,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Financial Research Automation API",
-    description="REST API for financial scraping, metrics calculation, peer benchmarking, and PPTX investor report generation.",
+    description=(
+        "REST API for financial scraping, metrics calculation, peer benchmarking, "
+        "and PPTX investor report generation."
+    ),
     version="1.0.0",
     lifespan=lifespan,
 )

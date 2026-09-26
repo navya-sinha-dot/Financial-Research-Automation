@@ -1,8 +1,7 @@
 from __future__ import annotations
 
+import contextlib
 import logging
-from pathlib import Path
-from typing import Optional
 
 from src.core.config import settings
 from src.core.constants import DEBUG_DIR
@@ -18,11 +17,9 @@ def detect_captcha(page) -> bool:
         "text=verify you are a human",
     ]
     for selector in selectors:
-        try:
+        with contextlib.suppress(Exception):
             if page.locator(selector).count() > 0:
                 return True
-        except Exception:
-            pass
     return False
 
 
@@ -31,19 +28,18 @@ def handle_captcha(page, *, is_demo: bool = False) -> bool:
         return False
 
     DEBUG_DIR.mkdir(parents=True, exist_ok=True)
-    try:
+    with contextlib.suppress(Exception):
         page.screenshot(path=str(DEBUG_DIR / "captcha_detected.png"), full_page=True)
-    except Exception:
-        pass
-    try:
+    with contextlib.suppress(Exception):
         html = page.content()
         (DEBUG_DIR / "captcha_detected.html").write_text(html, encoding="utf-8")
-    except Exception:
-        pass
 
     logger.warning("CAPTCHA or access challenge detected.")
     if is_demo:
-        logger.warning("CAPTCHA/access challenge detected. Please complete it manually in Chromium. The pipeline will continue after completion.")
+        logger.warning(
+            "CAPTCHA/access challenge detected. Please complete it manually in Chromium. "
+            "The pipeline will continue after completion."
+        )
         page.wait_for_timeout(int(getattr(settings, "SCRAPER_TIMEOUT", 30000)))
         return False
     raise RuntimeError("CAPTCHA or access challenge detected. The pipeline stopped safely without bypassing it.")

@@ -1,0 +1,13 @@
+-r requirements.txt
+
+# Linting, formatting, type checking
+ruff>=0.6.0
+black>=24.8.0
+mypy>=1.11.0
+types-requests>=2.32.0
+
+# Test coverage
+pytest-cov>=5.0.0
+
+# Local git hooks
+pre-commit>=3.8.0

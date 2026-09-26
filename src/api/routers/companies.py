@@ -1,17 +1,22 @@
-from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+
+from src.analytics.metrics import compute_period_ratios
 from src.core.database import get_db
 from src.models.company import Company
-from src.models.financial import FinancialPeriod, FinancialLineItem, ComputedRatio
-from src.schemas.company import CompanyResponse, CompanyCreate
-from src.schemas.financial import CompanyFinancialsResponse, FinancialPeriodResponse, LineItemResponse, ComputedRatioResponse
-from src.analytics.metrics import compute_period_ratios
+from src.models.financial import ComputedRatio, FinancialPeriod
+from src.schemas.company import CompanyCreate, CompanyResponse
+from src.schemas.financial import (
+    CompanyFinancialsResponse,
+    ComputedRatioResponse,
+    FinancialPeriodResponse,
+    LineItemResponse,
+)
 
 router = APIRouter(prefix="/companies", tags=["Companies"])
 
 
-@router.get("", response_model=List[CompanyResponse])
+@router.get("", response_model=list[CompanyResponse])
 def list_companies(db: Session = Depends(get_db)):
     """Retrieve all tracked companies."""
     return db.query(Company).order_by(Company.ticker).all()
@@ -67,10 +72,7 @@ def get_company_financials(company_id: int, db: Session = Depends(get_db)):
             )
             for item in p.line_items
         ]
-        ratios = [
-            ComputedRatioResponse(id=r.id, ratio_name=r.ratio_name, value=r.value)
-            for r in p.computed_ratios
-        ]
+        ratios = [ComputedRatioResponse(id=r.id, ratio_name=r.ratio_name, value=r.value) for r in p.computed_ratios]
         periods_response.append(
             FinancialPeriodResponse(
                 id=p.id,
@@ -112,13 +114,15 @@ def get_company_ratios(company_id: int, db: Session = Depends(get_db)):
     periods_data = []
     for p in periods:
         items_dict = {item.item_name: item.value for item in p.line_items}
-        periods_data.append({
-            "period_id": p.id,
-            "period_type": p.period_type,
-            "fiscal_year": p.fiscal_year,
-            "report_date": p.report_date,
-            "items": items_dict,
-        })
+        periods_data.append(
+            {
+                "period_id": p.id,
+                "period_type": p.period_type,
+                "fiscal_year": p.fiscal_year,
+                "report_date": p.report_date,
+                "items": items_dict,
+            }
+        )
 
     enriched = compute_period_ratios(periods_data)
 
@@ -128,11 +132,7 @@ def get_company_ratios(company_id: int, db: Session = Depends(get_db)):
         computed = record.get("computed_ratios", {})
         for r_name, r_val in computed.items():
             if r_val is not None:
-                ratio_row = (
-                    db.query(ComputedRatio)
-                    .filter_by(period_id=period_id, ratio_name=r_name)
-                    .first()
-                )
+                ratio_row = db.query(ComputedRatio).filter_by(period_id=period_id, ratio_name=r_name).first()
                 if not ratio_row:
                     ratio_row = ComputedRatio(
                         period_id=period_id,

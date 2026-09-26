@@ -1,33 +1,34 @@
 """python-pptx report deck assembler creating institutional-grade investor presentations."""
+
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Any
+
 from pptx import Presentation
-from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
-from pptx.enum.text import PP_ALIGN
 from pptx.enum.shapes import MSO_SHAPE
+from pptx.util import Inches, Pt
 
 logger = logging.getLogger(__name__)
 
 # Institutional Color Palette
-RGB_NAVY = RGBColor(15, 23, 42)        # Slate 900
+RGB_NAVY = RGBColor(15, 23, 42)  # Slate 900
 RGB_DARK_BLUE = RGBColor(30, 58, 138)  # Blue 900
-RGB_PRIMARY = RGBColor(37, 99, 235)    # Blue 600
-RGB_TEAL = RGBColor(13, 148, 136)      # Teal 600
-RGB_AMBER = RGBColor(217, 119, 6)      # Amber 600
-RGB_SLATE_LIGHT = RGBColor(241, 245, 249) # Slate 100
-RGB_TEXT_DARK = RGBColor(30, 41, 59)   # Slate 800
-RGB_TEXT_MUTED = RGBColor(100, 116, 139) # Slate 500
+RGB_PRIMARY = RGBColor(37, 99, 235)  # Blue 600
+RGB_TEAL = RGBColor(13, 148, 136)  # Teal 600
+RGB_AMBER = RGBColor(217, 119, 6)  # Amber 600
+RGB_SLATE_LIGHT = RGBColor(241, 245, 249)  # Slate 100
+RGB_TEXT_DARK = RGBColor(30, 41, 59)  # Slate 800
+RGB_TEXT_MUTED = RGBColor(100, 116, 139)  # Slate 500
 RGB_WHITE = RGBColor(255, 255, 255)
 
 
 def create_investor_report_presentation(
-    company_data: Dict[str, Any],
-    periods_data: List[Dict[str, Any]],
-    peer_data: Optional[Dict[str, Any]],
-    chart_paths: Dict[str, Path],
+    company_data: dict[str, Any],
+    periods_data: list[dict[str, Any]],
+    peer_data: dict[str, Any] | None,
+    chart_paths: dict[str, Path],
     output_path: Path,
 ) -> Path:
     """Assembles a 4-slide widescreen (16:9) PPTX presentation."""
@@ -51,7 +52,7 @@ def create_investor_report_presentation(
     # SLIDE 1: Title Slide (Executive Dark Theme)
     # ==========================================
     slide_1 = prs.slides.add_slide(blank_layout)
-    
+
     # Dark background banner
     bg = slide_1.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, Inches(13.333), Inches(7.5))
     bg.fill.solid()
@@ -84,13 +85,13 @@ def create_investor_report_presentation(
     p1.space_after = Pt(10)
 
     p2 = tf.add_paragraph()
-    p2.text = f"Quarterly Financial Performance & Peer Benchmarking Report"
+    p2.text = "Quarterly Financial Performance & Peer Benchmarking Report"
     p2.font.size = Pt(20)
     p2.font.color.rgb = RGB_SLATE_LIGHT
     p2.space_after = Pt(24)
 
     p3 = tf.add_paragraph()
-    date_str = datetime.now(timezone.utc).strftime("%B %d, %Y")
+    date_str = datetime.now(UTC).strftime("%B %d, %Y")
     p3.text = f"Exchange: {exchange}  |  Sector: {sector}  |  Generated: {date_str}"
     p3.font.size = Pt(13)
     p3.font.color.rgb = RGB_TEXT_MUTED
@@ -99,7 +100,9 @@ def create_investor_report_presentation(
     # SLIDE 2: Financial Summary & KPI Scorecards
     # ==========================================
     slide_2 = prs.slides.add_slide(blank_layout)
-    _add_slide_header(slide_2, "Executive Financial Summary", f"{company_name} ({ticker}) - Core Performance Indicators")
+    _add_slide_header(
+        slide_2, "Executive Financial Summary", f"{company_name} ({ticker}) - Core Performance Indicators"
+    )
 
     # 4 KPI cards across the top
     kpis = [
@@ -191,7 +194,9 @@ def create_investor_report_presentation(
     # SLIDE 3: Financial Trend Charts
     # ==========================================
     slide_3 = prs.slides.add_slide(blank_layout)
-    _add_slide_header(slide_3, "Financial Trajectory & Trends", "Multi-quarter revenue, net income, and margin performance")
+    _add_slide_header(
+        slide_3, "Financial Trajectory & Trends", "Multi-quarter revenue, net income, and margin performance"
+    )
 
     # Add revenue trend chart
     if "revenue" in chart_paths and chart_paths["revenue"].exists():
@@ -222,9 +227,12 @@ def create_investor_report_presentation(
     np1.font.color.rgb = RGB_DARK_BLUE
 
     np2 = ntf.add_paragraph()
-    latest_rev = latest_items.get('revenue', 0.0)
-    nm_val = (latest_ratios.get('net_margin') or 0.0) * 100
-    np2.text = f"• {ticker} delivered ${latest_rev:,.1f}M in latest quarterly revenue with a robust net margin of {nm_val:.1f}%.\n• Balance sheet shows stable liquidity with consistent operating cash flow generation."
+    latest_rev = latest_items.get("revenue", 0.0)
+    nm_val = (latest_ratios.get("net_margin") or 0.0) * 100
+    np2.text = (
+        f"• {ticker} delivered ${latest_rev:,.1f}M in latest quarterly revenue with a robust net margin "
+        f"of {nm_val:.1f}%.\n• Balance sheet shows stable liquidity with consistent operating cash flow generation."
+    )
     np2.font.size = Pt(10)
     np2.font.color.rgb = RGB_TEXT_DARK
 
@@ -232,7 +240,9 @@ def create_investor_report_presentation(
     # SLIDE 4: Peer Comparison Benchmark
     # ==========================================
     slide_4 = prs.slides.add_slide(blank_layout)
-    _add_slide_header(slide_4, "Peer Benchmark & Percentile Standing", f"{ticker} competitive position relative to industry peers")
+    _add_slide_header(
+        slide_4, "Peer Benchmark & Percentile Standing", f"{ticker} competitive position relative to industry peers"
+    )
 
     # Add peer comparison chart on left
     if "peer" in chart_paths and chart_paths["peer"].exists():
@@ -287,7 +297,7 @@ def create_investor_report_presentation(
                     cell.fill.fore_color.rgb = RGBColor(238, 242, 255)  # Light indigo highlight
                 for prg in cell.text_frame.paragraphs:
                     prg.font.size = Pt(10)
-                    prg.font.bold = (c_ticker.upper() == ticker.upper())
+                    prg.font.bold = c_ticker.upper() == ticker.upper()
                     prg.font.color.rgb = RGB_PRIMARY if c_ticker.upper() == ticker.upper() else RGB_TEXT_DARK
 
     # Save presentation

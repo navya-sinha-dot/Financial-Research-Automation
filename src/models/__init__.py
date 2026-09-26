@@ -1,5 +1,5 @@
 from src.models.company import Company
-from src.models.financial import FinancialPeriod, FinancialLineItem, ComputedRatio
+from src.models.financial import ComputedRatio, FinancialLineItem, FinancialPeriod
 from src.models.report import ReportJob, ReportStatus
 
 __all__ = [

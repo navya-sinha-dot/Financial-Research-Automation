@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
 
-from playwright.sync_api import Browser, Page, Playwright, sync_playwright
+from playwright.sync_api import Browser, Page, sync_playwright
 
 from src.core.config import settings
 from src.core.constants import DEBUG_DIR
 
 logger = logging.getLogger(__name__)
 
-_browser: Optional[Browser] = None
+_browser: Browser | None = None
 
 
 def launch_browser() -> Browser:

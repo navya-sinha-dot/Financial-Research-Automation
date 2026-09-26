@@ -1,31 +1,37 @@
 """Celery report generation task communicating with the database EXCLUSIVELY via the FastAPI API."""
-import os
+
+import contextlib
 import logging
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Dict, Any, Optional
+import os
+from datetime import UTC, datetime
+from typing import Any
+
 import httpx
 
 from src.core.celery_app import celery_app
 from src.core.config import settings
 from src.reporting.charts import (
-    generate_revenue_trend_chart,
     generate_margins_chart,
     generate_peer_comparison_chart,
+    generate_revenue_trend_chart,
 )
 from src.reporting.pptx_builder import create_investor_report_presentation
 
 logger = logging.getLogger(__name__)
 
 
-def _call_api(method: str, endpoint: str, json_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _call_api(method: str, endpoint: str, json_data: dict[str, Any] | None = None) -> Any:
     """Helper to communicate with FastAPI.
-    
+
+    Returns whatever shape the endpoint's JSON body is -- a dict for most
+    resource endpoints, a list for `/companies`. Callers narrow as needed.
+
     If running under test/eager mode or if HTTP fails, uses in-process TestClient
     to strictly adhere to: 'No direct DB access from the report generator - API only'.
     """
     if settings.CELERY_TASK_ALWAYS_EAGER or os.environ.get("CELERY_TASK_ALWAYS_EAGER") == "true":
         from fastapi.testclient import TestClient
+
         from src.api.main import app
 
         with TestClient(app) as test_client:
@@ -45,6 +51,7 @@ def _call_api(method: str, endpoint: str, json_data: Optional[Dict[str, Any]] = 
             "Using in-process FastAPI client to query API layer."
         )
         from fastapi.testclient import TestClient
+
         from src.api.main import app
 
         with TestClient(app) as test_client:
@@ -54,9 +61,9 @@ def _call_api(method: str, endpoint: str, json_data: Optional[Dict[str, Any]] = 
 
 
 @celery_app.task(bind=True, name="src.reporting.tasks.generate_report_task")
-def generate_report_task(self, job_id: int, company_id: int) -> Dict[str, Any]:
+def generate_report_task(self, job_id: int, company_id: int) -> dict[str, Any]:
     """Asynchronous Celery task that generates PPTX report for a company.
-    
+
     Talks to the database ONLY via FastAPI endpoints.
     """
     logger.info(f"[Task {self.request.id}] Starting PPTX report generation for Job #{job_id}, Company #{company_id}")
@@ -98,7 +105,7 @@ def generate_report_task(self, job_id: int, company_id: int) -> Dict[str, Any]:
         settings.ensure_directories()
         temp_dir = settings.DATA_DIR / "temp"
         temp_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 
         rev_chart_path = temp_dir / f"{ticker}_rev_{timestamp}.png"
         margin_chart_path = temp_dir / f"{ticker}_margins_{timestamp}.png"
@@ -135,7 +142,9 @@ def generate_report_task(self, job_id: int, company_id: int) -> Dict[str, Any]:
                 "output_path": str(output_pptx_path),
             },
         )
-        logger.info(f"[Task {self.request.id}] Successfully completed report generation for Job #{job_id}: {output_pptx_path}")
+        logger.info(
+            f"[Task {self.request.id}] Successfully completed report generation for Job #{job_id}: {output_pptx_path}"
+        )
 
         # Clean up temporary chart images
         for p in chart_paths.values():
@@ -153,7 +162,7 @@ def generate_report_task(self, job_id: int, company_id: int) -> Dict[str, Any]:
 
     except Exception as exc:
         logger.error(f"[Task {self.request.id}] Error generating report for Job #{job_id}: {exc}", exc_info=True)
-        try:
+        with contextlib.suppress(Exception):
             _call_api(
                 "PATCH",
                 f"/reports/{job_id}/status",
@@ -162,6 +171,4 @@ def generate_report_task(self, job_id: int, company_id: int) -> Dict[str, Any]:
                     "error_message": str(exc),
                 },
             )
-        except Exception:
-            pass
         return {"job_id": job_id, "status": "FAILED", "error": str(exc)}

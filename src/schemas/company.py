@@ -1,13 +1,13 @@
 from datetime import datetime
-from typing import Optional
+
 from pydantic import BaseModel, ConfigDict
 
 
 class CompanyBase(BaseModel):
     ticker: str
     name: str
-    sector: Optional[str] = "Information Technology"
-    exchange: Optional[str] = None
+    sector: str | None = "Information Technology"
+    exchange: str | None = None
 
 
 class CompanyCreate(CompanyBase):
