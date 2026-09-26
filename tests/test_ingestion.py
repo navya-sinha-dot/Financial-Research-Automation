@@ -1,14 +1,19 @@
-"""Tests for the SEC ingestion layer and failure isolation."""
+"""Tests for the SEC ingestion layer and failure isolation.
+
+These tests patch `fetch_company_financials` so the ingestion pipeline
+(DB upsert, batch failure isolation) can be verified without making real
+network calls to SEC EDGAR. The patched payload is test fixture data only —
+it is never used as a fallback or seed for the running application.
+"""
 from unittest.mock import patch
 from datetime import date
 
-from src.ingestion.scraper import _get_fallback_data
 from src.ingestion.tasks import ingest_company_financials, ingest_batch_companies
 from src.models.company import Company
 
 
 def _mock_company_data(ticker: str):
-    """Return realistic structured data for testing without network access."""
+    """Return structured fixture data for testing without network access."""
     return {
         "ticker": ticker,
         "name": f"{ticker} Corporation",
@@ -41,17 +46,6 @@ def _mock_company_data(ticker: str):
             },
         ],
     }
-
-
-def test_fallback_data_structure():
-    """Fallback data must always have 4 periods with required metric keys."""
-    data = _get_fallback_data("TEST")
-    assert data["ticker"] == "TEST"
-    assert len(data["periods"]) == 4
-    for period in data["periods"]:
-        assert "revenue" in period["items"]
-        assert "net_income" in period["items"]
-        assert period["period_type"] in ("Q1", "Q2", "Q3", "Q4")
 
 
 def test_ingest_company_financials_task(db_session):
