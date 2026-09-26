@@ -16,6 +16,11 @@ def detect_captcha(page) -> bool:
         "text=access challenge",
         "text=captcha",
         "text=verify you are a human",
+        # Cloudflare-style interstitial challenges
+        "text=checking your browser",
+        "text=just a moment",
+        "iframe[src*='challenges.cloudflare.com']",
+        "#cf-challenge-running",
     ]
     for selector in selectors:
         try:
