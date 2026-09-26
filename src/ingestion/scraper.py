@@ -128,17 +128,30 @@ def scrape_filing(ticker: str, filing_url: str, *, demo: bool = False) -> Dict[s
     }
 
 
+def _infer_period(period_of_report: str) -> tuple[str, int]:
+    """Derive a calendar (period_type, fiscal_year) pair from a filing's report date."""
+    report_date = date.fromisoformat(period_of_report)
+    quarter = (report_date.month - 1) // 3 + 1
+    return f"Q{quarter}", report_date.year
+
+
 def fetch_company_financials(ticker: str) -> Dict[str, Any]:
-    """Compatibility wrapper for the old ingestion API."""
+    """Compatibility wrapper for the old ingestion API.
+
+    Scrapes the company's latest SEC filing and returns it in the shape the
+    ingestion task expects. Raises if the filing cannot be found or parsed —
+    there is no synthetic fallback data.
+    """
     filing = discover_latest_filing(ticker)
     result = scrape_filing(ticker, filing["filing_url"], demo=False)
+    period_type, fiscal_year = _infer_period(filing["period_of_report"])
     return {
         "ticker": ticker.upper(),
         "name": filing["company_name"],
         "periods": [{
-            "period_type": "Q1",
-            "fiscal_year": 2026,
-            "report_date": filing["filing_date"],
+            "period_type": period_type,
+            "fiscal_year": fiscal_year,
+            "report_date": filing["period_of_report"],
             "items": {
                 **result["statements"].get("income_statement", {}),
                 **result["statements"].get("balance_sheet", {}),
@@ -146,92 +159,3 @@ def fetch_company_financials(ticker: str) -> Dict[str, Any]:
             },
         }],
     }
-
-
-def _get_fallback_data(ticker: str) -> Dict[str, Any]:
-    """Return deterministic quarterly data for offline ingestion failures."""
-    return {
-        "ticker": ticker,
-        "name": f"{ticker} Corporation",
-        "sector": "Information Technology",
-        "exchange": "NASDAQ",
-        "periods": [
-            {
-                "period_type": "Q1", "fiscal_year": 2024,
-                "report_date": date(2023, 6, 30),
-                "items": {
-                    "revenue": 5100.0, "net_income": 980.0, "operating_income": 1200.0,
-                    "total_equity": 8800.0, "current_assets": 7100.0, "current_liabilities": 2800.0,
-                },
-            },
-            {
-                "period_type": "Q2", "fiscal_year": 2024,
-                "report_date": date(2023, 9, 30),
-                "items": {
-                    "revenue": 5250.0, "net_income": 1020.0, "operating_income": 1260.0,
-                    "total_equity": 9100.0, "current_assets": 7350.0, "current_liabilities": 2900.0,
-                },
-            },
-            {
-                "period_type": "Q3", "fiscal_year": 2024,
-                "report_date": date(2023, 12, 31),
-                "items": {
-                    "revenue": 5380.0, "net_income": 1060.0, "operating_income": 1310.0,
-                    "total_equity": 9400.0, "current_assets": 7600.0, "current_liabilities": 2950.0,
-                },
-            },
-            {
-                "period_type": "Q4", "fiscal_year": 2024,
-                "report_date": date(2024, 3, 31),
-                "items": {
-                    "revenue": 5520.0, "net_income": 1110.0, "operating_income": 1380.0,
-                    "total_equity": 9800.0, "current_assets": 7950.0, "current_liabilities": 3050.0,
-                },
-            },
-        ],
-    }
-
-
-
-# ---------------------------------------------------------------------------
-# Legacy HTML helpers (kept for parser.py fallback path only)
-# ---------------------------------------------------------------------------
-
-def generate_fallback_financial_html(ticker: str) -> str:
-    """Generates a minimal financial HTML table — used only by parser.py fallback."""
-    d = _get_fallback_data(ticker)
-    rows = {
-        "revenue": "Total Revenue",
-        "net_income": "Net Income",
-        "operating_income": "Operating Income",
-        "total_equity": "Total Stockholders' Equity",
-        "current_assets": "Current Assets",
-        "current_liabilities": "Current Liabilities",
-    }
-    header_ths = "".join(
-        f'<th data-date="{p["report_date"]}" data-quarter="{p["period_type"]}" '
-        f'data-year="{p["fiscal_year"]}">{p["period_type"]} {p["fiscal_year"]}</th>'
-        for p in d["periods"]
-    )
-    body_rows = ""
-    for key, label in rows.items():
-        tds = "".join(
-            f'<td>{p["items"].get(key, 0.0)}</td>' for p in d["periods"]
-        )
-        body_rows += f'<tr data-metric="{key}"><td>{label}</td>{tds}</tr>\n'
-
-    return f"""<!DOCTYPE html>
-<html>
-<head><title>Financial Statements for {ticker}</title></head>
-<body>
-    <div id="company-header">
-        <h1 class="ticker">{ticker}</h1>
-        <span class="sector">Information Technology</span>
-        <span class="exchange">NASDAQ</span>
-    </div>
-    <table class="financial-table quarterly" data-ticker="{ticker}">
-        <thead><tr><th>Breakdown</th>{header_ths}</tr></thead>
-        <tbody>{body_rows}</tbody>
-    </table>
-</body>
-</html>"""
