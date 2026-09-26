@@ -1,4 +1,4 @@
-from src.schemas.company import CompanyBase, CompanyCreate, CompanyResponse
+from src.schemas.company import CompanyBase, CompanyCreate, CompanyResponse, PaginatedCompanyResponse
 from src.schemas.financial import (
     LineItemResponse,
     ComputedRatioResponse,
@@ -20,6 +20,7 @@ __all__ = [
     "CompanyBase",
     "CompanyCreate",
     "CompanyResponse",
+    "PaginatedCompanyResponse",
     "LineItemResponse",
     "ComputedRatioResponse",
     "FinancialPeriodResponse",

@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 os.environ["DATABASE_URL"] = "sqlite:///./data/test_fra.db"
 os.environ["CELERY_TASK_ALWAYS_EAGER"] = "true"
 
-from src.core.database import Base, engine, SessionLocal, get_db
+from src.core.database import Base, engine, SessionLocal
 from src.models.company import Company
 from src.models.financial import FinancialPeriod, FinancialLineItem, ComputedRatio
 from src.models.report import ReportJob, ReportStatus
@@ -37,17 +37,15 @@ def db_session() -> Generator[Session, None, None]:
 
 @pytest.fixture(scope="function")
 def client(db_session: Session) -> Generator[TestClient, None, None]:
-    """TestClient configured with the overridden database dependency."""
-    def override_get_db():
-        try:
-            yield db_session
-        finally:
-            pass
+    """TestClient hitting the real app.
 
-    app.dependency_overrides[get_db] = override_get_db
+    Routes use the async DB engine (get_async_db), which -- like the sync
+    engine `db_session` uses for test setup -- points at the same
+    DATABASE_URL test file, so writes made through `db_session`/`seeded_db`
+    are visible to the API without needing a dependency override.
+    """
     with TestClient(app) as test_client:
         yield test_client
-    app.dependency_overrides.clear()
 
 
 @pytest.fixture

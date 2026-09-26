@@ -16,12 +16,15 @@ class FRAApiClient:
     def __init__(self, base_url: Optional[str] = None):
         self.base_url = (base_url or settings.API_BASE_URL).rstrip("/")
 
-    def get_companies(self) -> List[Dict[str, Any]]:
-        """Fetch list of all tracked companies."""
+    def _write_headers(self) -> Dict[str, str]:
+        return {"X-API-Key": settings.API_KEY} if settings.API_KEY else {}
+
+    def get_companies(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """Fetch list of all tracked companies (unwraps the paginated response)."""
         try:
-            resp = requests.get(f"{self.base_url}/companies", timeout=10)
+            resp = requests.get(f"{self.base_url}/companies", params={"limit": limit}, timeout=10)
             resp.raise_for_status()
-            return resp.json()
+            return resp.json().get("items", [])
         except requests.RequestException as e:
             logger.error(f"Failed to fetch companies from API: {e}")
             return []
@@ -66,6 +69,7 @@ class FRAApiClient:
             resp = requests.post(
                 f"{self.base_url}/reports",
                 json={"company_id": company_id},
+                headers=self._write_headers(),
                 timeout=10,
             )
             resp.raise_for_status()
@@ -100,6 +104,7 @@ class FRAApiClient:
             resp = requests.post(
                 f"{self.base_url}/ingest",
                 json={"ticker": ticker},
+                headers=self._write_headers(),
                 timeout=10,
             )
             resp.raise_for_status()

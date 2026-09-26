@@ -14,9 +14,19 @@ def test_health_check(client: TestClient):
 def test_list_companies(client: TestClient, seeded_db):
     response = client.get("/companies")
     assert response.status_code == 200
-    companies = response.json()
-    assert len(companies) >= 1
-    assert companies[0]["ticker"] == "INFY"
+    data = response.json()
+    assert data["total"] >= 1
+    assert len(data["items"]) >= 1
+    assert data["items"][0]["ticker"] == "INFY"
+
+
+def test_list_companies_pagination_params(client: TestClient, seeded_db):
+    response = client.get("/companies", params={"skip": 0, "limit": 1})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["skip"] == 0
+    assert data["limit"] == 1
+    assert len(data["items"]) <= 1
 
 
 def test_create_company(client: TestClient, db_session):
