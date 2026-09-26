@@ -48,12 +48,14 @@ flowchart TD
 ## Data flow
 
 1. A ticker is submitted (via the dashboard, the API, or the CLI).
-2. `SECClient` resolves the company's CIK and looks up its most recent 10-Q
-   (falling back to 10-K) from `data.sec.gov`.
-3. Playwright launches Chromium and opens the filing document directly on
-   `sec.gov`.
+2. `SECClient` resolves the company's CIK and looks up its most recent
+   several 10-Q/10-K filings (falling back to 10-K when needed) from
+   `data.sec.gov`, with retries, jittered throttling, and a TTL'd disk cache.
+3. Playwright launches Chromium once and, for each filing, navigates the
+   same browser tab directly to the filing document on `sec.gov`.
 4. The scraper locates the income statement, balance sheet, and cash flow
-   statement tables in the rendered page and extracts every labeled row.
+   statement tables in the rendered page (parsed with BeautifulSoup/lxml)
+   and extracts every labeled row.
 5. The normalizer converts raw text (`"$(2,345)"`, `"$94,036 million"`, etc.)
    into signed numeric USD values.
 6. Line items are upserted into the database under the correct company and
@@ -65,15 +67,39 @@ flowchart TD
 ## CAPTCHA / anti-bot handling
 
 The pipeline never attempts to bypass a CAPTCHA or access challenge. It
-detects one, saves a screenshot and the page HTML for debugging, and either
-pauses for a human to resolve it manually (demo mode) or fails the scrape
-outright (headless/automated mode).
+detects one (including Cloudflare-style interstitials), saves a screenshot
+and the page HTML for debugging, and either pauses for a human to resolve it
+manually (demo mode) or fails the scrape outright (headless/automated mode).
+
+## Scraping resilience & stealth
+
+The scraper is built to behave like a real, careful visitor rather than a
+predictable script:
+
+- **Randomized fingerprint per session** — each scraping session gets a
+  fresh browser context with a randomized viewport, user agent, locale, and
+  timezone, plus init-script patches that remove the most common automation
+  tells (`navigator.webdriver`, empty plugin lists, missing `window.chrome`).
+- **Human-like pacing** — every navigation and extraction step is followed
+  by a short, randomized delay instead of firing requests back-to-back.
+- **Retries with exponential backoff + jitter** — both SEC HTTP requests and
+  Playwright page navigations retry transient failures (timeouts, 429/5xx)
+  automatically via `tenacity` instead of failing the whole ingestion job.
+- **Robust HTML parsing** — filing tables are parsed with BeautifulSoup/lxml
+  rather than regular expressions, which tolerates the inconsistent markup
+  real SEC filings actually ship with.
+- **Multi-quarter historical backfill** — ingestion scrapes the last several
+  10-Q/10-K filings (configurable via `SCRAPER_BACKFILL_QUARTERS`) in one
+  browser session, reusing a single tab across filings, so YoY/QoQ analytics
+  have real historical data instead of one snapshot quarter.
 
 ## SEC rate-limit etiquette
 
 Every request carries a descriptive `User-Agent`, is throttled with a
-configurable delay, and successful responses are cached on disk so repeated
-lookups for the same ticker don't re-hit SEC servers unnecessarily.
+configurable delay plus random jitter, and successful responses are cached
+on disk with a TTL (`SEC_CACHE_TTL_SECONDS`) so repeated lookups for the same
+ticker don't re-hit SEC servers unnecessarily while still refreshing
+periodically.
 
 ## Installation
 
@@ -100,9 +126,14 @@ Key variables:
 | Variable | Purpose |
 |---|---|
 | `SEC_USER_AGENT` | Required by SEC EDGAR on every request |
-| `SEC_REQUEST_DELAY` | Seconds between SEC requests (politeness throttle) |
+| `SEC_REQUEST_DELAY` | Base seconds between SEC requests (politeness throttle) |
+| `SEC_REQUEST_JITTER` | Extra random seconds added on top of the base delay |
+| `SEC_MAX_RETRIES` | Retry attempts for transient SEC request failures |
+| `SEC_CACHE_TTL_SECONDS` | How long a cached SEC response stays valid before refetching |
 | `SCRAPER_HEADLESS` | `false` shows the live Chromium browser (demo mode) |
 | `SCRAPER_SLOW_MO` | Slows down browser actions for visible demos |
+| `SCRAPER_MIN_DELAY_MS` / `SCRAPER_MAX_DELAY_MS` | Randomized human-like delay range between scraping steps |
+| `SCRAPER_BACKFILL_QUARTERS` | Number of most-recent filings to scrape per ingestion (historical backfill) |
 | `DATABASE_URL` | SQLite by default; Postgres in Docker Compose |
 | `CELERY_TASK_ALWAYS_EAGER` | `true` runs Celery tasks synchronously (no Redis needed) for local dev |
 
