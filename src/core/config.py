@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     API_BASE_URL: str = "http://localhost:8000"
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
+    # Empty string disables auth entirely -- convenient for local/demo use.
+    # Set a real value to require `X-API-Key` on mutating endpoints.
+    API_KEY: str = ""
+    RATE_LIMIT_INGEST: str = "10/minute"
+    RATE_LIMIT_REPORTS: str = "15/minute"
 
     STREAMLIT_SERVER_PORT: int = 8501
     STREAMLIT_SERVER_ADDRESS: str = "0.0.0.0"

@@ -19,3 +19,10 @@ class CompanyResponse(CompanyBase):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class PaginatedCompanyResponse(BaseModel):
+    items: list[CompanyResponse]
+    total: int
+    skip: int
+    limit: int
