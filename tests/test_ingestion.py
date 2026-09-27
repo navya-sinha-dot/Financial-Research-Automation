@@ -5,10 +5,11 @@ These tests patch `fetch_company_financials` so the ingestion pipeline
 network calls to SEC EDGAR. The patched payload is test fixture data only —
 it is never used as a fallback or seed for the running application.
 """
-from unittest.mock import patch
-from datetime import date
 
-from src.ingestion.tasks import ingest_company_financials, ingest_batch_companies
+from datetime import date
+from unittest.mock import patch
+
+from src.ingestion.tasks import ingest_batch_companies, ingest_company_financials
 from src.models.company import Company
 
 
@@ -21,28 +22,56 @@ def _mock_company_data(ticker: str):
         "exchange": "NASDAQ",
         "periods": [
             {
-                "period_type": "Q1", "fiscal_year": 2024,
+                "period_type": "Q1",
+                "fiscal_year": 2024,
                 "report_date": date(2023, 6, 30),
-                "items": {"revenue": 5100.0, "net_income": 980.0, "operating_income": 1200.0,
-                          "total_equity": 8800.0, "current_assets": 7100.0, "current_liabilities": 2800.0},
+                "items": {
+                    "revenue": 5100.0,
+                    "net_income": 980.0,
+                    "operating_income": 1200.0,
+                    "total_equity": 8800.0,
+                    "current_assets": 7100.0,
+                    "current_liabilities": 2800.0,
+                },
             },
             {
-                "period_type": "Q2", "fiscal_year": 2024,
+                "period_type": "Q2",
+                "fiscal_year": 2024,
                 "report_date": date(2023, 9, 30),
-                "items": {"revenue": 5250.0, "net_income": 1020.0, "operating_income": 1260.0,
-                          "total_equity": 9100.0, "current_assets": 7350.0, "current_liabilities": 2900.0},
+                "items": {
+                    "revenue": 5250.0,
+                    "net_income": 1020.0,
+                    "operating_income": 1260.0,
+                    "total_equity": 9100.0,
+                    "current_assets": 7350.0,
+                    "current_liabilities": 2900.0,
+                },
             },
             {
-                "period_type": "Q3", "fiscal_year": 2024,
+                "period_type": "Q3",
+                "fiscal_year": 2024,
                 "report_date": date(2023, 12, 31),
-                "items": {"revenue": 5380.0, "net_income": 1060.0, "operating_income": 1310.0,
-                          "total_equity": 9400.0, "current_assets": 7600.0, "current_liabilities": 2950.0},
+                "items": {
+                    "revenue": 5380.0,
+                    "net_income": 1060.0,
+                    "operating_income": 1310.0,
+                    "total_equity": 9400.0,
+                    "current_assets": 7600.0,
+                    "current_liabilities": 2950.0,
+                },
             },
             {
-                "period_type": "Q4", "fiscal_year": 2024,
+                "period_type": "Q4",
+                "fiscal_year": 2024,
                 "report_date": date(2024, 3, 31),
-                "items": {"revenue": 5520.0, "net_income": 1110.0, "operating_income": 1380.0,
-                          "total_equity": 9800.0, "current_assets": 7950.0, "current_liabilities": 3050.0},
+                "items": {
+                    "revenue": 5520.0,
+                    "net_income": 1110.0,
+                    "operating_income": 1380.0,
+                    "total_equity": 9800.0,
+                    "current_assets": 7950.0,
+                    "current_liabilities": 3050.0,
+                },
             },
         ],
     }
@@ -71,6 +100,7 @@ def test_ingest_company_financials_task(db_session):
 def test_batch_ingestion_failure_isolation(db_session):
     """A failure on one ticker must not stop the rest of the batch."""
     with patch("src.ingestion.tasks.fetch_company_financials") as mock_fetch:
+
         def side_effect(ticker):
             if ticker == "FAIL":
                 raise RuntimeError("Simulated network timeout")

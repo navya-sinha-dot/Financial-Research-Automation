@@ -1,13 +1,12 @@
-from typing import List, Dict, Any
+import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-import pandas as pd
 
+from src.analytics.metrics import compute_peer_percentiles, compute_period_ratios
 from src.core.database import get_db
 from src.models.company import Company
-from src.models.financial import FinancialPeriod, FinancialLineItem
-from src.schemas.analytics import CompareRequest, PeerCompareResponse, CompanyMetricSummary
-from src.analytics.metrics import compute_period_ratios, compute_peer_percentiles
+from src.models.financial import FinancialPeriod
+from src.schemas.analytics import CompanyMetricSummary, CompareRequest, PeerCompareResponse
 
 router = APIRouter(prefix="/compare", tags=["Peer Comparison"])
 
@@ -31,55 +30,61 @@ def compare_companies(payload: CompareRequest, db: Session = Depends(get_db)):
             .all()
         )
         if not periods:
-            company_summaries.append({
-                "company_id": comp.id,
-                "ticker": comp.ticker,
-                "name": comp.name,
-                "latest_revenue": None,
-                "latest_net_income": None,
-                "yoy_growth": None,
-                "qoq_growth": None,
-                "net_margin": None,
-                "roe": None,
-                "current_ratio": None,
-            })
+            company_summaries.append(
+                {
+                    "company_id": comp.id,
+                    "ticker": comp.ticker,
+                    "name": comp.name,
+                    "latest_revenue": None,
+                    "latest_net_income": None,
+                    "yoy_growth": None,
+                    "qoq_growth": None,
+                    "net_margin": None,
+                    "roe": None,
+                    "current_ratio": None,
+                }
+            )
             continue
 
         # Format periods data for analytics calculation
         periods_data = []
         for p in periods:
             items_dict = {item.item_name: item.value for item in p.line_items}
-            periods_data.append({
-                "period_type": p.period_type,
-                "fiscal_year": p.fiscal_year,
-                "report_date": p.report_date,
-                "items": items_dict,
-            })
+            periods_data.append(
+                {
+                    "period_type": p.period_type,
+                    "fiscal_year": p.fiscal_year,
+                    "report_date": p.report_date,
+                    "items": items_dict,
+                }
+            )
 
         enriched_periods = compute_period_ratios(periods_data)
         latest_period = enriched_periods[-1]
         latest_items = latest_period.get("items", {})
         latest_ratios = latest_period.get("computed_ratios", {})
 
-        company_summaries.append({
-            "company_id": comp.id,
-            "ticker": comp.ticker,
-            "name": comp.name,
-            "latest_revenue": latest_items.get("revenue"),
-            "latest_net_income": latest_items.get("net_income"),
-            "yoy_growth": latest_ratios.get("yoy_growth"),
-            "qoq_growth": latest_ratios.get("qoq_growth"),
-            "net_margin": latest_ratios.get("net_margin"),
-            "roe": latest_ratios.get("roe"),
-            "current_ratio": latest_ratios.get("current_ratio"),
-        })
+        company_summaries.append(
+            {
+                "company_id": comp.id,
+                "ticker": comp.ticker,
+                "name": comp.name,
+                "latest_revenue": latest_items.get("revenue"),
+                "latest_net_income": latest_items.get("net_income"),
+                "yoy_growth": latest_ratios.get("yoy_growth"),
+                "qoq_growth": latest_ratios.get("qoq_growth"),
+                "net_margin": latest_ratios.get("net_margin"),
+                "roe": latest_ratios.get("roe"),
+                "current_ratio": latest_ratios.get("current_ratio"),
+            }
+        )
 
     # Compute peer percentiles across selected companies
     ranked_summaries = compute_peer_percentiles(company_summaries)
 
     # Calculate summary stats (mean, min, max) for numeric fields
     df_metrics = pd.DataFrame(ranked_summaries)
-    summary_stats: Dict[str, Dict[str, float]] = {}
+    summary_stats: dict[str, dict[str, float]] = {}
     numeric_cols = ["latest_revenue", "net_margin", "roe", "current_ratio", "yoy_growth"]
     for col in numeric_cols:
         if col in df_metrics.columns and df_metrics[col].dropna().count() > 0:

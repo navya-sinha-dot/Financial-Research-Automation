@@ -1,7 +1,7 @@
 """Unit tests for FastAPI endpoints: companies, financials, ratios, compare, reports."""
+
 import pytest
 from fastapi.testclient import TestClient
-from src.models.report import ReportJob, ReportStatus
 
 
 def test_health_check(client: TestClient):
@@ -44,7 +44,7 @@ def test_get_company_financials(client: TestClient, seeded_db):
     data = response.json()
     assert data["ticker"] == "INFY"
     assert len(data["periods"]) == 2
-    
+
     # Verify line items in Q1
     q1 = data["periods"][0]
     line_item_map = {item["item_name"]: item["value"] for item in q1["line_items"]}

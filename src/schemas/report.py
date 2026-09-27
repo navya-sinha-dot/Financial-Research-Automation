@@ -1,6 +1,7 @@
 from datetime import datetime
-from typing import Optional
+
 from pydantic import BaseModel, ConfigDict
+
 from src.models.report import ReportStatus
 
 
@@ -10,8 +11,8 @@ class ReportCreateRequest(BaseModel):
 
 class ReportStatusUpdateRequest(BaseModel):
     status: ReportStatus
-    output_path: Optional[str] = None
-    error_message: Optional[str] = None
+    output_path: str | None = None
+    error_message: str | None = None
 
 
 class ReportJobResponse(BaseModel):
@@ -19,9 +20,9 @@ class ReportJobResponse(BaseModel):
     company_id: int
     status: ReportStatus
     requested_at: datetime
-    completed_at: Optional[datetime] = None
-    output_path: Optional[str] = None
-    download_url: Optional[str] = None
-    error_message: Optional[str] = None
+    completed_at: datetime | None = None
+    output_path: str | None = None
+    download_url: str | None = None
+    error_message: str | None = None
 
     model_config = ConfigDict(from_attributes=True)

@@ -1,14 +1,15 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from src.core.config import settings
 from src.core.database import get_db
 from src.models.company import Company
 from src.models.report import ReportJob, ReportStatus
 from src.schemas.report import ReportCreateRequest, ReportJobResponse, ReportStatusUpdateRequest
-from src.core.config import settings
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
@@ -27,7 +28,7 @@ def request_report_generation(payload: ReportCreateRequest, db: Session = Depend
     job = ReportJob(
         company_id=payload.company_id,
         status=ReportStatus.PENDING,
-        requested_at=datetime.now(timezone.utc),
+        requested_at=datetime.now(UTC),
     )
     db.add(job)
     db.commit()
@@ -36,6 +37,7 @@ def request_report_generation(payload: ReportCreateRequest, db: Session = Depend
     # Enqueue Celery async task
     try:
         from src.reporting.tasks import generate_report_task
+
         generate_report_task.delay(job_id=job.id, company_id=company.id)
     except Exception as exc:
         # If celery broker is unavailable or running synchronously
@@ -98,7 +100,7 @@ def update_report_job_status(
     if payload.error_message:
         job.error_message = payload.error_message
     if payload.status in (ReportStatus.COMPLETED, ReportStatus.FAILED):
-        job.completed_at = datetime.now(timezone.utc)
+        job.completed_at = datetime.now(UTC)
 
     db.commit()
     db.refresh(job)
