@@ -1,10 +1,10 @@
 """SEC EDGAR HTML parser for quarterly financial statements."""
 from __future__ import annotations
 
-import html
 import logging
-import re
-from typing import Any, Dict, Iterable
+from typing import Any, Dict
+
+from bs4 import BeautifulSoup
 
 from src.ingestion.normalizer import normalize_statement_rows
 
@@ -12,10 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def _clean_cell_text(value: str) -> str:
-    text = html.unescape(value or "")
-    text = re.sub(r"<.*?>", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    return " ".join(value.split())
 
 
 def _statement_target_for_row(label: str) -> str:
@@ -31,17 +28,16 @@ def _statement_target_for_row(label: str) -> str:
 
 def parse_financial_statements(html_content: str) -> Dict[str, Dict[str, Any]]:
     """Extract a normalized set of SEC financial statements from filing HTML."""
-    tables = re.findall(r"<table[^>]*>(.*?)</table>", html_content, flags=re.IGNORECASE | re.DOTALL)
+    soup = BeautifulSoup(html_content, "lxml")
     statements: Dict[str, Dict[str, Any]] = {"income_statement": {}, "balance_sheet": {}, "cash_flow": {}}
 
-    for table_html in tables:
-        rows = re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, flags=re.IGNORECASE | re.DOTALL)
-        for row_html in rows:
-            cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row_html, flags=re.IGNORECASE | re.DOTALL)
+    for table in soup.find_all("table"):
+        for row in table.find_all("tr"):
+            cells = row.find_all(["td", "th"])
             if len(cells) < 2:
                 continue
-            label = _clean_cell_text(cells[0])
-            value = _clean_cell_text(cells[1])
+            label = _clean_cell_text(cells[0].get_text(" "))
+            value = _clean_cell_text(cells[1].get_text(" "))
             if not label or not value:
                 continue
             target = _statement_target_for_row(label)
