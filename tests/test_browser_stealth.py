@@ -1,4 +1,5 @@
 """Unit tests for scraping stealth helpers that don't require launching a real browser."""
+
 from src.ingestion.browser import human_delay
 
 

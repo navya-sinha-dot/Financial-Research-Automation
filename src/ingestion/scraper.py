@@ -1,16 +1,17 @@
 """SEC filing scraper built around Playwright and Chromium."""
+
 from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
 
 from src.core.config import settings
-from src.ingestion.browser import create_page, save_debug_html, save_debug_screenshot, close_browser, human_delay
+from src.ingestion.browser import close_browser, create_page, human_delay, save_debug_html, save_debug_screenshot
 from src.ingestion.captcha_handler import handle_captcha
 from src.ingestion.filing_discovery import discover_recent_filings
 from src.ingestion.normalizer import normalize_financial_value
@@ -53,17 +54,22 @@ def wait_for_filing(page, *, timeout: int = 30000) -> None:
 def locate_income_statement(page):
     locator = page.locator("text=CONSOLIDATED STATEMENTS OF OPERATIONS")
     if locator.count() > 0:
-        logger.info("[BROWSER] searching for \"CONSOLIDATED STATEMENTS OF OPERATIONS\"")
+        logger.info('[BROWSER] searching for "CONSOLIDATED STATEMENTS OF OPERATIONS"')
         return True
     return False
 
 
 def locate_balance_sheet(page):
-    return page.locator("text=CONSOLIDATED BALANCE SHEETS").count() > 0 or page.locator("text=BALANCE SHEET").count() > 0
+    return (
+        page.locator("text=CONSOLIDATED BALANCE SHEETS").count() > 0 or page.locator("text=BALANCE SHEET").count() > 0
+    )
 
 
 def locate_cash_flow_statement(page):
-    return page.locator("text=CONSOLIDATED STATEMENTS OF CASH FLOWS").count() > 0 or page.locator("text=CASH FLOW").count() > 0
+    return (
+        page.locator("text=CONSOLIDATED STATEMENTS OF CASH FLOWS").count() > 0
+        or page.locator("text=CASH FLOW").count() > 0
+    )
 
 
 def extract_table(page, table_text_hint: str):
@@ -78,9 +84,9 @@ def extract_table(page, table_text_hint: str):
     raise ValueError(f"Could not locate table for {table_text_hint}.")
 
 
-def extract_financial_rows(page, table_text_hint: str) -> Dict[str, Any]:
+def extract_financial_rows(page, table_text_hint: str) -> dict[str, Any]:
     table = extract_table(page, table_text_hint)
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
     for row in table.find_all("tr"):
         cells = row.find_all(["td", "th"])
         if len(cells) < 2:
@@ -96,12 +102,16 @@ def extract_financial_value(raw_text: str) -> float | None:
     return normalize_financial_value(raw_text)
 
 
-def scrape_filing(ticker: str, filing_url: str, *, demo: bool = False, page=None, keep_open: bool = False) -> Dict[str, Any]:
+def scrape_filing(
+    ticker: str, filing_url: str, *, demo: bool = False, page=None, keep_open: bool = False
+) -> dict[str, Any]:
     """Scrapes a single filing. Pass `page` + `keep_open=True` to reuse a
     browser tab across multiple filings during historical backfill instead
     of paying the launch/context cost for every quarter.
     """
-    logger.info("[3/10] Opening filing for %s (%s)", ticker.upper(), "reused tab" if page is not None else "new browser")
+    logger.info(
+        "[3/10] Opening filing for %s (%s)", ticker.upper(), "reused tab" if page is not None else "new browser"
+    )
     active_page = open_filing(filing_url, page=page)
     logger.info("[OK] Browser ready")
 
@@ -109,7 +119,7 @@ def scrape_filing(ticker: str, filing_url: str, *, demo: bool = False, page=None
     wait_for_filing(active_page)
     logger.info("[OK] Filing loaded")
 
-    statements: Dict[str, Dict[str, Any]] = {"income_statement": {}, "balance_sheet": {}, "cash_flow": {}}
+    statements: dict[str, dict[str, Any]] = {"income_statement": {}, "balance_sheet": {}, "cash_flow": {}}
 
     for step_name, hint, key in [
         ("[5/10] Scraping Income Statement", "CONSOLIDATED STATEMENTS OF OPERATIONS", "income_statement"),
@@ -147,7 +157,7 @@ def _infer_period(period_of_report: str) -> tuple[str, int]:
     return f"Q{quarter}", report_date.year
 
 
-def fetch_company_financials(ticker: str) -> Dict[str, Any]:
+def fetch_company_financials(ticker: str) -> dict[str, Any]:
     """Scrapes multiple recent SEC filings (historical backfill) so ratio
     analytics (YoY/QoQ) have real multi-quarter data instead of one snapshot.
 
@@ -157,8 +167,8 @@ def fetch_company_financials(ticker: str) -> Dict[str, Any]:
     limit = int(getattr(settings, "SCRAPER_BACKFILL_QUARTERS", 4))
     filings = discover_recent_filings(ticker, limit=limit)
 
-    company_name: Optional[str] = None
-    periods: List[Dict[str, Any]] = []
+    company_name: str | None = None
+    periods: list[dict[str, Any]] = []
     page = create_page()
     try:
         for i, filing in enumerate(filings):
@@ -166,20 +176,24 @@ def fetch_company_financials(ticker: str) -> Dict[str, Any]:
             try:
                 result = scrape_filing(ticker, filing["filing_url"], demo=False, page=page, keep_open=True)
             except Exception as exc:
-                logger.warning("Skipping filing %s for %s after scrape failure: %s", filing.get("accession_number"), ticker, exc)
+                logger.warning(
+                    "Skipping filing %s for %s after scrape failure: %s", filing.get("accession_number"), ticker, exc
+                )
                 continue
 
             period_type, fiscal_year = _infer_period(filing["period_of_report"])
-            periods.append({
-                "period_type": period_type,
-                "fiscal_year": fiscal_year,
-                "report_date": filing["period_of_report"],
-                "items": {
-                    **result["statements"].get("income_statement", {}),
-                    **result["statements"].get("balance_sheet", {}),
-                    **result["statements"].get("cash_flow", {}),
-                },
-            })
+            periods.append(
+                {
+                    "period_type": period_type,
+                    "fiscal_year": fiscal_year,
+                    "report_date": filing["period_of_report"],
+                    "items": {
+                        **result["statements"].get("income_statement", {}),
+                        **result["statements"].get("balance_sheet", {}),
+                        **result["statements"].get("cash_flow", {}),
+                    },
+                }
+            )
             if i < len(filings) - 1:
                 human_delay(1000, 2500)
     finally:

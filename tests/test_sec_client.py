@@ -1,6 +1,7 @@
 """Unit tests for SECClient resilience features: TTL cache, retry/backoff, and
 multi-filing history discovery -- all exercised without any real network call.
 """
+
 import json
 import time
 from types import SimpleNamespace
@@ -8,7 +9,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from src.ingestion.sec_client import SECClient, SECClientError, SECRequestError
+from src.ingestion.sec_client import SECClient, SECClientError
 
 
 @pytest.fixture
@@ -93,13 +94,15 @@ def _fake_submissions_payload(forms):
 
 
 def test_filing_history_returns_most_recent_n_filings_in_order(client, monkeypatch):
-    payload = _fake_submissions_payload([
-        ("10-Q", "2024-01-30"),
-        ("8-K", "2023-12-01"),  # not a target form type, must be skipped
-        ("10-Q", "2023-10-30"),
-        ("10-K", "2023-08-15"),
-        ("10-Q", "2023-04-30"),
-    ])
+    payload = _fake_submissions_payload(
+        [
+            ("10-Q", "2024-01-30"),
+            ("8-K", "2023-12-01"),  # not a target form type, must be skipped
+            ("10-Q", "2023-10-30"),
+            ("10-K", "2023-08-15"),
+            ("10-Q", "2023-04-30"),
+        ]
+    )
 
     monkeypatch.setattr(client, "cik_lookup", lambda ticker: "0000320193")
     monkeypatch.setattr(client, "_read_cache", lambda url: None)
