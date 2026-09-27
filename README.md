@@ -121,6 +121,32 @@ periodically.
   rate limit, 500) comes back in one consistent shape:
   `{"error": {"status_code", "message", "path", "details"?}}`.
 
+## Observability & performance
+
+- **Structured JSON logs** — every log line is a JSON object
+  (`timestamp`, `level`, `logger`, `request_id`, `message`, plus any extra
+  fields) via `python-json-logger`. Set `LOG_JSON=false` for
+  human-readable text logs during local development.
+- **Request correlation IDs** — `RequestIdMiddleware` assigns a request ID
+  (echoing `X-Request-ID` if the caller sent one, otherwise a fresh UUID),
+  makes it available to every log line emitted while handling that
+  request via a `contextvar`, and returns it on the response so a client
+  can correlate its request with server-side logs.
+- **Prometheus metrics** — `GET /metrics` exposes auto-instrumented
+  request count/latency histograms plus custom counters/histograms for
+  ingestion and report-generation outcomes and durations, and cache
+  hit/miss counts. Under Celery's default (separate worker process), task
+  metrics only show up on the API's own `/metrics` when
+  `CELERY_TASK_ALWAYS_EAGER=true` (local/demo mode) — spreading metrics
+  across processes correctly needs `prometheus_client`'s multiprocess
+  mode, which is out of scope here.
+- **Redis caching** — `POST /compare` (the most computationally expensive
+  endpoint: it recomputes ratios and percentile rankings for every
+  selected company) is cached cache-aside style, keyed by the sorted
+  company IDs, for `CACHE_TTL_SECONDS`. If Redis is unreachable, every
+  cache call degrades gracefully to a miss/no-op rather than failing the
+  request.
+
 ## Installation
 
 ```bash
@@ -158,6 +184,8 @@ Key variables:
 | `CELERY_TASK_ALWAYS_EAGER` | `true` runs Celery tasks synchronously (no Redis needed) for local dev |
 | `API_KEY` | Empty disables auth (default); set to require `X-API-Key` on mutating endpoints |
 | `RATE_LIMIT_INGEST` / `RATE_LIMIT_REPORTS` | Per-IP rate limits (e.g. `10/minute`) on the scrape/report endpoints |
+| `LOG_JSON` | `true` (default) emits structured JSON logs; `false` for human-readable text |
+| `CACHE_TTL_SECONDS` | How long a cached `/compare` response stays valid before recomputing |
 
 ## Running the pipeline
 
