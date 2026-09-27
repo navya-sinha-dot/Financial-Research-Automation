@@ -52,3 +52,11 @@ testpaths = ["tests"]
 [tool.coverage.run]
 source = ["src"]
 omit = ["src/dashboard/*"]
+# Async routes run in two places coverage.py won't follow by default:
+# Starlette's TestClient executes the ASGI app on a background thread, and
+# SQLAlchemy's async ORM additionally bridges to its sync unit-of-work code
+# via greenlet (greenlet_spawn), even for a native-async driver like
+# aiosqlite. Without tracing both, every async route (companies/compare/
+# reports) looks almost entirely uncovered even though the tests genuinely
+# exercise it end to end.
+concurrency = ["thread", "greenlet"]

@@ -1,12 +1,15 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.api.rate_limit import limiter
+from src.api.security import require_api_key
 from src.core.config import settings
-from src.core.database import get_db
+from src.core.database import get_async_db
 from src.models.company import Company
 from src.models.report import ReportJob, ReportStatus
 from src.schemas.report import ReportCreateRequest, ReportJobResponse, ReportStatusUpdateRequest
@@ -14,10 +17,18 @@ from src.schemas.report import ReportCreateRequest, ReportJobResponse, ReportSta
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
 
-@router.post("", response_model=ReportJobResponse, status_code=status.HTTP_202_ACCEPTED)
-def request_report_generation(payload: ReportCreateRequest, db: Session = Depends(get_db)):
+@router.post(
+    "",
+    response_model=ReportJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_api_key)],
+)
+@limiter.limit(settings.RATE_LIMIT_REPORTS)
+async def request_report_generation(
+    request: Request, payload: ReportCreateRequest, db: AsyncSession = Depends(get_async_db)
+):
     """Enqueues an asynchronous report generation job for a company."""
-    company = db.query(Company).filter_by(id=payload.company_id).first()
+    company = (await db.execute(select(Company).filter_by(id=payload.company_id))).scalar_one_or_none()
     if not company:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -31,8 +42,8 @@ def request_report_generation(payload: ReportCreateRequest, db: Session = Depend
         requested_at=datetime.now(UTC),
     )
     db.add(job)
-    db.commit()
-    db.refresh(job)
+    await db.commit()
+    await db.refresh(job)
 
     # Enqueue Celery async task
     try:
@@ -41,16 +52,16 @@ def request_report_generation(payload: ReportCreateRequest, db: Session = Depend
         generate_report_task.delay(job_id=job.id, company_id=company.id)
     except Exception as exc:
         # If celery broker is unavailable or running synchronously
-        job.error_message = f"Failed to enqueue task: {str(exc)}"
-        db.commit()
+        job.error_message = f"Failed to enqueue task: {exc!s}"
+        await db.commit()
 
     return _build_job_response(job)
 
 
 @router.get("/{job_id}", response_model=ReportJobResponse)
-def get_report_job_status(job_id: int, db: Session = Depends(get_db)):
+async def get_report_job_status(job_id: int, db: AsyncSession = Depends(get_async_db)):
     """Check the status and download link of a report generation job."""
-    job = db.query(ReportJob).filter_by(id=job_id).first()
+    job = (await db.execute(select(ReportJob).filter_by(id=job_id))).scalar_one_or_none()
     if not job:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -60,9 +71,9 @@ def get_report_job_status(job_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{job_id}/download")
-def download_report(job_id: int, db: Session = Depends(get_db)):
+async def download_report(job_id: int, db: AsyncSession = Depends(get_async_db)):
     """Download the generated PowerPoint (.pptx) presentation."""
-    job = db.query(ReportJob).filter_by(id=job_id).first()
+    job = (await db.execute(select(ReportJob).filter_by(id=job_id))).scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="Report job not found.")
 
@@ -83,14 +94,14 @@ def download_report(job_id: int, db: Session = Depends(get_db)):
     )
 
 
-@router.patch("/{job_id}/status", response_model=ReportJobResponse)
-def update_report_job_status(
+@router.patch("/{job_id}/status", response_model=ReportJobResponse, dependencies=[Depends(require_api_key)])
+async def update_report_job_status(
     job_id: int,
     payload: ReportStatusUpdateRequest,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ):
     """Endpoint used by the report generator worker to update job status without direct DB access."""
-    job = db.query(ReportJob).filter_by(id=job_id).first()
+    job = (await db.execute(select(ReportJob).filter_by(id=job_id))).scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="Report job not found.")
 
@@ -102,8 +113,8 @@ def update_report_job_status(
     if payload.status in (ReportStatus.COMPLETED, ReportStatus.FAILED):
         job.completed_at = datetime.now(UTC)
 
-    db.commit()
-    db.refresh(job)
+    await db.commit()
+    await db.refresh(job)
     return _build_job_response(job)
 
 

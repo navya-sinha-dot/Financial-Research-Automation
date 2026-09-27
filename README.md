@@ -38,7 +38,11 @@ flowchart TD
   filing page, rather than an HTTP-only scrape, so the extraction is visible
   and demonstrable step by step.
 - **FastAPI** is the only component allowed to touch the database; the
-  dashboard and the Celery workers talk to it exclusively over HTTP.
+  dashboard and the Celery workers talk to it exclusively over HTTP. Routes
+  run against an async SQLAlchemy engine (`asyncpg`/`aiosqlite`) so the API
+  can serve concurrent requests without blocking on database I/O; Celery
+  workers keep a separate synchronous engine, since a worker's execution
+  model is inherently synchronous per process.
 - **Celery + Redis** decouple slow work (a live browser scrape, a multi-slide
   PPTX render) from the request/response cycle.
 - **Pandas** computes every derived metric (YoY/QoQ growth, net margin, ROE,
@@ -101,6 +105,22 @@ on disk with a TTL (`SEC_CACHE_TTL_SECONDS`) so repeated lookups for the same
 ticker don't re-hit SEC servers unnecessarily while still refreshing
 periodically.
 
+## API hardening
+
+- **Auth** — read (`GET`) endpoints stay open so the app is easy to demo;
+  mutating endpoints (`POST /companies`, `POST /ingest`, `POST /reports`,
+  `PATCH /reports/{id}/status`) require an `X-API-Key` header when
+  `API_KEY` is configured. Leaving it empty (the default) disables auth for
+  local development.
+- **Rate limiting** — `POST /ingest` and `POST /reports` are rate-limited
+  per client IP (`RATE_LIMIT_INGEST`, `RATE_LIMIT_REPORTS`), since each
+  triggers a real browser scrape or PPTX render.
+- **Pagination** — `GET /companies` takes `skip`/`limit` query params and
+  returns `{items, total, skip, limit}`.
+- **Structured errors** — every error response (404, 422 validation, 429
+  rate limit, 500) comes back in one consistent shape:
+  `{"error": {"status_code", "message", "path", "details"?}}`.
+
 ## Installation
 
 ```bash
@@ -134,8 +154,10 @@ Key variables:
 | `SCRAPER_SLOW_MO` | Slows down browser actions for visible demos |
 | `SCRAPER_MIN_DELAY_MS` / `SCRAPER_MAX_DELAY_MS` | Randomized human-like delay range between scraping steps |
 | `SCRAPER_BACKFILL_QUARTERS` | Number of most-recent filings to scrape per ingestion (historical backfill) |
-| `DATABASE_URL` | SQLite by default; Postgres in Docker Compose |
+| `DATABASE_URL` | SQLite by default; Postgres in Docker Compose. The API derives its async URL from this automatically |
 | `CELERY_TASK_ALWAYS_EAGER` | `true` runs Celery tasks synchronously (no Redis needed) for local dev |
+| `API_KEY` | Empty disables auth (default); set to require `X-API-Key` on mutating endpoints |
+| `RATE_LIMIT_INGEST` / `RATE_LIMIT_REPORTS` | Per-IP rate limits (e.g. `10/minute`) on the scrape/report endpoints |
 
 ## Running the pipeline
 

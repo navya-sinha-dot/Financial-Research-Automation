@@ -1,9 +1,11 @@
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from src.analytics.metrics import compute_peer_percentiles, compute_period_ratios
-from src.core.database import get_db
+from src.core.database import get_async_db
 from src.models.company import Company
 from src.models.financial import FinancialPeriod
 from src.schemas.analytics import CompanyMetricSummary, CompareRequest, PeerCompareResponse
@@ -12,21 +14,27 @@ router = APIRouter(prefix="/compare", tags=["Peer Comparison"])
 
 
 @router.post("", response_model=PeerCompareResponse)
-def compare_companies(payload: CompareRequest, db: Session = Depends(get_db)):
+async def compare_companies(payload: CompareRequest, db: AsyncSession = Depends(get_async_db)):
     """Accepts a list of company IDs and returns cross-company metric comparisons and peer percentile rankings."""
     if not payload.company_ids:
         raise HTTPException(status_code=400, detail="Must provide at least one company_id to compare.")
 
-    companies = db.query(Company).filter(Company.id.in_(payload.company_ids)).all()
+    companies = (await db.execute(select(Company).filter(Company.id.in_(payload.company_ids)))).scalars().all()
     if not companies:
         raise HTTPException(status_code=404, detail="No matching companies found.")
 
     company_summaries = []
     for comp in companies:
         periods = (
-            db.query(FinancialPeriod)
-            .filter_by(company_id=comp.id)
-            .order_by(FinancialPeriod.fiscal_year.asc(), FinancialPeriod.report_date.asc())
+            (
+                await db.execute(
+                    select(FinancialPeriod)
+                    .filter_by(company_id=comp.id)
+                    .options(selectinload(FinancialPeriod.line_items))
+                    .order_by(FinancialPeriod.fiscal_year.asc(), FinancialPeriod.report_date.asc())
+                )
+            )
+            .scalars()
             .all()
         )
         if not periods:

@@ -3,7 +3,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi.middleware import SlowAPIMiddleware
 
+from src.api.errors import register_error_handlers
+from src.api.rate_limit import limiter
 from src.api.routers import companies, compare, ingestion, reports
 from src.core.config import settings
 from src.core.database import Base, engine
@@ -14,7 +17,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Ensure tables exist on startup if SQLite or testing
+    # Ensure tables exist on startup if SQLite or testing. Uses the sync
+    # engine since this only runs once at process startup, not per-request.
     Base.metadata.create_all(bind=engine)
     settings.ensure_directories()
     logger.info("Financial Research Automation (FRA) API started.")
@@ -32,6 +36,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
+
 # CORS Middleware
 app.add_middleware(
     CORSMiddleware,
@@ -40,6 +47,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+register_error_handlers(app)
 
 # Include Routers
 app.include_router(companies.router)

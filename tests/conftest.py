@@ -12,7 +12,7 @@ os.environ["DATABASE_URL"] = "sqlite:///./data/test_fra.db"
 os.environ["CELERY_TASK_ALWAYS_EAGER"] = "true"
 
 from src.api.main import app
-from src.core.database import Base, SessionLocal, engine, get_db
+from src.core.database import Base, SessionLocal, engine
 from src.models.company import Company
 from src.models.financial import FinancialLineItem, FinancialPeriod
 
@@ -35,18 +35,15 @@ def db_session() -> Generator[Session, None, None]:
 
 @pytest.fixture(scope="function")
 def client(db_session: Session) -> Generator[TestClient, None, None]:
-    """TestClient configured with the overridden database dependency."""
+    """TestClient hitting the real app.
 
-    def override_get_db():
-        try:
-            yield db_session
-        finally:
-            pass
-
-    app.dependency_overrides[get_db] = override_get_db
+    Routes use the async DB engine (get_async_db), which -- like the sync
+    engine `db_session` uses for test setup -- points at the same
+    DATABASE_URL test file, so writes made through `db_session`/`seeded_db`
+    are visible to the API without needing a dependency override.
+    """
     with TestClient(app) as test_client:
         yield test_client
-    app.dependency_overrides.clear()
 
 
 @pytest.fixture
