@@ -1,20 +1,20 @@
+import contextlib
 import os
-import pytest
+from collections.abc import Generator
 from datetime import date
-from typing import Generator
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
+
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 # Set test environment
 os.environ["DATABASE_URL"] = "sqlite:///./data/test_fra.db"
 os.environ["CELERY_TASK_ALWAYS_EAGER"] = "true"
 
-from src.core.database import Base, engine, SessionLocal, get_db
-from src.models.company import Company
-from src.models.financial import FinancialPeriod, FinancialLineItem, ComputedRatio
-from src.models.report import ReportJob, ReportStatus
 from src.api.main import app
+from src.core.database import Base, SessionLocal, engine
+from src.models.company import Company
+from src.models.financial import FinancialLineItem, FinancialPeriod
 
 
 @pytest.fixture(scope="function")
@@ -27,27 +27,23 @@ def db_session() -> Generator[Session, None, None]:
     finally:
         session.rollback()
         for table in reversed(Base.metadata.sorted_tables):
-            try:
+            with contextlib.suppress(Exception):
                 session.execute(table.delete())
-            except Exception:
-                pass
         session.commit()
         session.close()
 
 
 @pytest.fixture(scope="function")
 def client(db_session: Session) -> Generator[TestClient, None, None]:
-    """TestClient configured with the overridden database dependency."""
-    def override_get_db():
-        try:
-            yield db_session
-        finally:
-            pass
+    """TestClient hitting the real app.
 
-    app.dependency_overrides[get_db] = override_get_db
+    Routes use the async DB engine (get_async_db), which -- like the sync
+    engine `db_session` uses for test setup -- points at the same
+    DATABASE_URL test file, so writes made through `db_session`/`seeded_db`
+    are visible to the API without needing a dependency override.
+    """
     with TestClient(app) as test_client:
         yield test_client
-    app.dependency_overrides.clear()
 
 
 @pytest.fixture

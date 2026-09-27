@@ -1,4 +1,5 @@
 """Start the FRA API and dashboard in local browser-demo mode."""
+
 from __future__ import annotations
 
 import argparse
@@ -7,7 +8,6 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 

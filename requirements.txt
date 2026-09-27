@@ -5,10 +5,19 @@ pydantic>=2.6.0
 pydantic-settings>=2.2.0
 httpx>=0.27.0
 
+# Observability
+python-json-logger>=3.1.0
+prometheus-fastapi-instrumentator>=7.0.0
+
 # Database & Migrations
 sqlalchemy>=2.0.28
 alembic>=1.13.1
 psycopg2-binary>=2.9.9
+asyncpg>=0.29.0
+aiosqlite>=0.20.0
+
+# API hardening
+slowapi>=0.1.9
 
 # Async Task Queue
 celery>=5.3.6
@@ -17,6 +26,9 @@ redis>=5.0.3
 # SEC + Browser Automation
 playwright>=1.46.0
 requests>=2.31.0
+beautifulsoup4>=4.12.3
+lxml>=5.2.1
+tenacity>=8.2.3
 
 # Analytics & Reporting
 pandas>=2.2.1
@@ -29,3 +41,4 @@ streamlit>=1.32.0
 
 # Testing & Dev
 pytest>=8.1.1
+fakeredis>=2.24.0

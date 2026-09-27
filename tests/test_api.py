@@ -1,7 +1,7 @@
 """Unit tests for FastAPI endpoints: companies, financials, ratios, compare, reports."""
+
 import pytest
 from fastapi.testclient import TestClient
-from src.models.report import ReportJob, ReportStatus
 
 
 def test_health_check(client: TestClient):
@@ -14,9 +14,19 @@ def test_health_check(client: TestClient):
 def test_list_companies(client: TestClient, seeded_db):
     response = client.get("/companies")
     assert response.status_code == 200
-    companies = response.json()
-    assert len(companies) >= 1
-    assert companies[0]["ticker"] == "INFY"
+    data = response.json()
+    assert data["total"] >= 1
+    assert len(data["items"]) >= 1
+    assert data["items"][0]["ticker"] == "INFY"
+
+
+def test_list_companies_pagination_params(client: TestClient, seeded_db):
+    response = client.get("/companies", params={"skip": 0, "limit": 1})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["skip"] == 0
+    assert data["limit"] == 1
+    assert len(data["items"]) <= 1
 
 
 def test_create_company(client: TestClient, db_session):
@@ -44,7 +54,7 @@ def test_get_company_financials(client: TestClient, seeded_db):
     data = response.json()
     assert data["ticker"] == "INFY"
     assert len(data["periods"]) == 2
-    
+
     # Verify line items in Q1
     q1 = data["periods"][0]
     line_item_map = {item["item_name"]: item["value"] for item in q1["line_items"]}

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Optional
+from typing import Any
 
 
-def normalize_financial_value(raw_value: Any) -> Optional[float]:
+def normalize_financial_value(raw_value: Any) -> float | None:
     if raw_value is None:
         return None
 
@@ -49,8 +49,8 @@ def normalize_financial_value(raw_value: Any) -> Optional[float]:
     return -result if negative else result
 
 
-def normalize_statement_rows(rows: Dict[str, Any]) -> Dict[str, Any]:
-    normalized: Dict[str, Any] = {}
+def normalize_statement_rows(rows: dict[str, Any]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
     for label, raw in rows.items():
         normalized_value = normalize_financial_value(raw)
         normalized[label] = normalized_value

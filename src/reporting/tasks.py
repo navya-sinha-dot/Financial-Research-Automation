@@ -1,42 +1,60 @@
 """Celery report generation task communicating with the database EXCLUSIVELY via the FastAPI API."""
-import os
+
+import contextlib
 import logging
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Dict, Any, Optional
+import os
+import time
+from datetime import UTC, datetime
+from typing import Any
+
 import httpx
 
 from src.core.celery_app import celery_app
 from src.core.config import settings
+from src.core.metrics import REPORT_GENERATION_DURATION_SECONDS, REPORT_GENERATION_TOTAL
 from src.reporting.charts import (
-    generate_revenue_trend_chart,
     generate_margins_chart,
     generate_peer_comparison_chart,
+    generate_revenue_trend_chart,
 )
 from src.reporting.pptx_builder import create_investor_report_presentation
 
 logger = logging.getLogger(__name__)
 
 
-def _call_api(method: str, endpoint: str, json_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _api_key_headers() -> dict[str, str]:
+    """Auth header for calling back into the API-key-gated write endpoints.
+
+    Empty when settings.API_KEY is unset, matching the API's own opt-in auth.
+    """
+    return {"X-API-Key": settings.API_KEY} if settings.API_KEY else {}
+
+
+def _call_api(method: str, endpoint: str, json_data: dict[str, Any] | None = None) -> Any:
     """Helper to communicate with FastAPI.
-    
+
+    Returns whatever shape the endpoint's JSON body is -- a dict for most
+    resource endpoints, a list for `/companies`. Callers narrow as needed.
+
     If running under test/eager mode or if HTTP fails, uses in-process TestClient
     to strictly adhere to: 'No direct DB access from the report generator - API only'.
     """
+    headers = _api_key_headers()
+
     if settings.CELERY_TASK_ALWAYS_EAGER or os.environ.get("CELERY_TASK_ALWAYS_EAGER") == "true":
         from fastapi.testclient import TestClient
+
         from src.api.main import app
 
         with TestClient(app) as test_client:
-            resp = test_client.request(method, endpoint, json=json_data)
+            resp = test_client.request(method, endpoint, json=json_data, headers=headers)
             resp.raise_for_status()
             return resp.json()
 
     url = f"{settings.API_BASE_URL}{endpoint}"
     try:
         with httpx.Client(timeout=5.0) as client:
-            resp = client.request(method, url, json=json_data)
+            resp = client.request(method, url, json=json_data, headers=headers)
             resp.raise_for_status()
             return resp.json()
     except Exception as http_err:
@@ -45,21 +63,23 @@ def _call_api(method: str, endpoint: str, json_data: Optional[Dict[str, Any]] = 
             "Using in-process FastAPI client to query API layer."
         )
         from fastapi.testclient import TestClient
+
         from src.api.main import app
 
         with TestClient(app) as test_client:
-            resp = test_client.request(method, endpoint, json=json_data)
+            resp = test_client.request(method, endpoint, json=json_data, headers=headers)
             resp.raise_for_status()
             return resp.json()
 
 
 @celery_app.task(bind=True, name="src.reporting.tasks.generate_report_task")
-def generate_report_task(self, job_id: int, company_id: int) -> Dict[str, Any]:
+def generate_report_task(self, job_id: int, company_id: int) -> dict[str, Any]:
     """Asynchronous Celery task that generates PPTX report for a company.
-    
+
     Talks to the database ONLY via FastAPI endpoints.
     """
     logger.info(f"[Task {self.request.id}] Starting PPTX report generation for Job #{job_id}, Company #{company_id}")
+    _started_at = time.monotonic()
 
     try:
         # Step 1: Update job status to PROCESSING via API
@@ -89,7 +109,8 @@ def generate_report_task(self, job_id: int, company_id: int) -> Dict[str, Any]:
                 p["items"] = {item["item_name"]: item["value"] for item in p["line_items"]}
 
         # Step 4: Fetch peer companies for benchmark comparison via API
-        all_companies = _call_api("GET", "/companies")
+        all_companies_page = _call_api("GET", "/companies?limit=200")
+        all_companies = all_companies_page.get("items", [])
         peer_ids = [c["id"] for c in all_companies if c["id"] != company_id][:4]
         compare_ids = [company_id] + peer_ids
         peer_data = _call_api("POST", "/compare", {"company_ids": compare_ids})
@@ -98,7 +119,7 @@ def generate_report_task(self, job_id: int, company_id: int) -> Dict[str, Any]:
         settings.ensure_directories()
         temp_dir = settings.DATA_DIR / "temp"
         temp_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 
         rev_chart_path = temp_dir / f"{ticker}_rev_{timestamp}.png"
         margin_chart_path = temp_dir / f"{ticker}_margins_{timestamp}.png"
@@ -135,7 +156,9 @@ def generate_report_task(self, job_id: int, company_id: int) -> Dict[str, Any]:
                 "output_path": str(output_pptx_path),
             },
         )
-        logger.info(f"[Task {self.request.id}] Successfully completed report generation for Job #{job_id}: {output_pptx_path}")
+        logger.info(
+            f"[Task {self.request.id}] Successfully completed report generation for Job #{job_id}: {output_pptx_path}"
+        )
 
         # Clean up temporary chart images
         for p in chart_paths.values():
@@ -145,6 +168,8 @@ def generate_report_task(self, job_id: int, company_id: int) -> Dict[str, Any]:
             except Exception:
                 pass
 
+        REPORT_GENERATION_TOTAL.labels(status="COMPLETED").inc()
+        REPORT_GENERATION_DURATION_SECONDS.observe(time.monotonic() - _started_at)
         return {
             "job_id": job_id,
             "status": "COMPLETED",
@@ -153,7 +178,7 @@ def generate_report_task(self, job_id: int, company_id: int) -> Dict[str, Any]:
 
     except Exception as exc:
         logger.error(f"[Task {self.request.id}] Error generating report for Job #{job_id}: {exc}", exc_info=True)
-        try:
+        with contextlib.suppress(Exception):
             _call_api(
                 "PATCH",
                 f"/reports/{job_id}/status",
@@ -162,6 +187,6 @@ def generate_report_task(self, job_id: int, company_id: int) -> Dict[str, Any]:
                     "error_message": str(exc),
                 },
             )
-        except Exception:
-            pass
+        REPORT_GENERATION_TOTAL.labels(status="FAILED").inc()
+        REPORT_GENERATION_DURATION_SECONDS.observe(time.monotonic() - _started_at)
         return {"job_id": job_id, "status": "FAILED", "error": str(exc)}

@@ -38,7 +38,11 @@ flowchart TD
   filing page, rather than an HTTP-only scrape, so the extraction is visible
   and demonstrable step by step.
 - **FastAPI** is the only component allowed to touch the database; the
-  dashboard and the Celery workers talk to it exclusively over HTTP.
+  dashboard and the Celery workers talk to it exclusively over HTTP. Routes
+  run against an async SQLAlchemy engine (`asyncpg`/`aiosqlite`) so the API
+  can serve concurrent requests without blocking on database I/O; Celery
+  workers keep a separate synchronous engine, since a worker's execution
+  model is inherently synchronous per process.
 - **Celery + Redis** decouple slow work (a live browser scrape, a multi-slide
   PPTX render) from the request/response cycle.
 - **Pandas** computes every derived metric (YoY/QoQ growth, net margin, ROE,
@@ -48,12 +52,14 @@ flowchart TD
 ## Data flow
 
 1. A ticker is submitted (via the dashboard, the API, or the CLI).
-2. `SECClient` resolves the company's CIK and looks up its most recent 10-Q
-   (falling back to 10-K) from `data.sec.gov`.
-3. Playwright launches Chromium and opens the filing document directly on
-   `sec.gov`.
+2. `SECClient` resolves the company's CIK and looks up its most recent
+   several 10-Q/10-K filings (falling back to 10-K when needed) from
+   `data.sec.gov`, with retries, jittered throttling, and a TTL'd disk cache.
+3. Playwright launches Chromium once and, for each filing, navigates the
+   same browser tab directly to the filing document on `sec.gov`.
 4. The scraper locates the income statement, balance sheet, and cash flow
-   statement tables in the rendered page and extracts every labeled row.
+   statement tables in the rendered page (parsed with BeautifulSoup/lxml)
+   and extracts every labeled row.
 5. The normalizer converts raw text (`"$(2,345)"`, `"$94,036 million"`, etc.)
    into signed numeric USD values.
 6. Line items are upserted into the database under the correct company and
@@ -65,15 +71,81 @@ flowchart TD
 ## CAPTCHA / anti-bot handling
 
 The pipeline never attempts to bypass a CAPTCHA or access challenge. It
-detects one, saves a screenshot and the page HTML for debugging, and either
-pauses for a human to resolve it manually (demo mode) or fails the scrape
-outright (headless/automated mode).
+detects one (including Cloudflare-style interstitials), saves a screenshot
+and the page HTML for debugging, and either pauses for a human to resolve it
+manually (demo mode) or fails the scrape outright (headless/automated mode).
+
+## Scraping resilience & stealth
+
+The scraper is built to behave like a real, careful visitor rather than a
+predictable script:
+
+- **Randomized fingerprint per session** — each scraping session gets a
+  fresh browser context with a randomized viewport, user agent, locale, and
+  timezone, plus init-script patches that remove the most common automation
+  tells (`navigator.webdriver`, empty plugin lists, missing `window.chrome`).
+- **Human-like pacing** — every navigation and extraction step is followed
+  by a short, randomized delay instead of firing requests back-to-back.
+- **Retries with exponential backoff + jitter** — both SEC HTTP requests and
+  Playwright page navigations retry transient failures (timeouts, 429/5xx)
+  automatically via `tenacity` instead of failing the whole ingestion job.
+- **Robust HTML parsing** — filing tables are parsed with BeautifulSoup/lxml
+  rather than regular expressions, which tolerates the inconsistent markup
+  real SEC filings actually ship with.
+- **Multi-quarter historical backfill** — ingestion scrapes the last several
+  10-Q/10-K filings (configurable via `SCRAPER_BACKFILL_QUARTERS`) in one
+  browser session, reusing a single tab across filings, so YoY/QoQ analytics
+  have real historical data instead of one snapshot quarter.
 
 ## SEC rate-limit etiquette
 
 Every request carries a descriptive `User-Agent`, is throttled with a
-configurable delay, and successful responses are cached on disk so repeated
-lookups for the same ticker don't re-hit SEC servers unnecessarily.
+configurable delay plus random jitter, and successful responses are cached
+on disk with a TTL (`SEC_CACHE_TTL_SECONDS`) so repeated lookups for the same
+ticker don't re-hit SEC servers unnecessarily while still refreshing
+periodically.
+
+## API hardening
+
+- **Auth** — read (`GET`) endpoints stay open so the app is easy to demo;
+  mutating endpoints (`POST /companies`, `POST /ingest`, `POST /reports`,
+  `PATCH /reports/{id}/status`) require an `X-API-Key` header when
+  `API_KEY` is configured. Leaving it empty (the default) disables auth for
+  local development.
+- **Rate limiting** — `POST /ingest` and `POST /reports` are rate-limited
+  per client IP (`RATE_LIMIT_INGEST`, `RATE_LIMIT_REPORTS`), since each
+  triggers a real browser scrape or PPTX render.
+- **Pagination** — `GET /companies` takes `skip`/`limit` query params and
+  returns `{items, total, skip, limit}`.
+- **Structured errors** — every error response (404, 422 validation, 429
+  rate limit, 500) comes back in one consistent shape:
+  `{"error": {"status_code", "message", "path", "details"?}}`.
+
+## Observability & performance
+
+- **Structured JSON logs** — every log line is a JSON object
+  (`timestamp`, `level`, `logger`, `request_id`, `message`, plus any extra
+  fields) via `python-json-logger`. Set `LOG_JSON=false` for
+  human-readable text logs during local development.
+- **Request correlation IDs** — `RequestIdMiddleware` assigns a request ID
+  (echoing `X-Request-ID` if the caller sent one, otherwise a fresh UUID),
+  makes it available to every log line emitted while handling that
+  request via a `contextvar`, and returns it on the response so a client
+  can correlate its request with server-side logs.
+- **Prometheus metrics** — `GET /metrics` exposes auto-instrumented
+  request count/latency histograms plus custom counters/histograms for
+  ingestion and report-generation outcomes and durations, and cache
+  hit/miss counts. Under Celery's default (separate worker process), task
+  metrics only show up on the API's own `/metrics` when
+  `CELERY_TASK_ALWAYS_EAGER=true` (local/demo mode) — spreading metrics
+  across processes correctly needs `prometheus_client`'s multiprocess
+  mode, which is out of scope here.
+- **Redis caching** — `POST /compare` (the most computationally expensive
+  endpoint: it recomputes ratios and percentile rankings for every
+  selected company) is cached cache-aside style, keyed by the sorted
+  company IDs, for `CACHE_TTL_SECONDS`. If Redis is unreachable, every
+  cache call degrades gracefully to a miss/no-op rather than failing the
+  request.
 
 ## Installation
 
@@ -100,11 +172,20 @@ Key variables:
 | Variable | Purpose |
 |---|---|
 | `SEC_USER_AGENT` | Required by SEC EDGAR on every request |
-| `SEC_REQUEST_DELAY` | Seconds between SEC requests (politeness throttle) |
+| `SEC_REQUEST_DELAY` | Base seconds between SEC requests (politeness throttle) |
+| `SEC_REQUEST_JITTER` | Extra random seconds added on top of the base delay |
+| `SEC_MAX_RETRIES` | Retry attempts for transient SEC request failures |
+| `SEC_CACHE_TTL_SECONDS` | How long a cached SEC response stays valid before refetching |
 | `SCRAPER_HEADLESS` | `false` shows the live Chromium browser (demo mode) |
 | `SCRAPER_SLOW_MO` | Slows down browser actions for visible demos |
-| `DATABASE_URL` | SQLite by default; Postgres in Docker Compose |
+| `SCRAPER_MIN_DELAY_MS` / `SCRAPER_MAX_DELAY_MS` | Randomized human-like delay range between scraping steps |
+| `SCRAPER_BACKFILL_QUARTERS` | Number of most-recent filings to scrape per ingestion (historical backfill) |
+| `DATABASE_URL` | SQLite by default; Postgres in Docker Compose. The API derives its async URL from this automatically |
 | `CELERY_TASK_ALWAYS_EAGER` | `true` runs Celery tasks synchronously (no Redis needed) for local dev |
+| `API_KEY` | Empty disables auth (default); set to require `X-API-Key` on mutating endpoints |
+| `RATE_LIMIT_INGEST` / `RATE_LIMIT_REPORTS` | Per-IP rate limits (e.g. `10/minute`) on the scrape/report endpoints |
+| `LOG_JSON` | `true` (default) emits structured JSON logs; `false` for human-readable text |
+| `CACHE_TTL_SECONDS` | How long a cached `/compare` response stays valid before recomputing |
 
 ## Running the pipeline
 
