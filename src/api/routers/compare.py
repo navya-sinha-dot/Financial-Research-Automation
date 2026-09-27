@@ -5,6 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.analytics.metrics import compute_peer_percentiles, compute_period_ratios
+from src.core.cache import cache_get, cache_set
+from src.core.config import settings
 from src.core.database import get_async_db
 from src.models.company import Company
 from src.models.financial import FinancialPeriod
@@ -13,11 +15,25 @@ from src.schemas.analytics import CompanyMetricSummary, CompareRequest, PeerComp
 router = APIRouter(prefix="/compare", tags=["Peer Comparison"])
 
 
+def _cache_key(company_ids: list[int]) -> str:
+    return "compare:" + ",".join(str(i) for i in sorted(set(company_ids)))
+
+
 @router.post("", response_model=PeerCompareResponse)
 async def compare_companies(payload: CompareRequest, db: AsyncSession = Depends(get_async_db)):
-    """Accepts a list of company IDs and returns cross-company metric comparisons and peer percentile rankings."""
+    """Accepts a list of company IDs and returns cross-company metric comparisons and peer percentile rankings.
+
+    Cached for CACHE_TTL_SECONDS since peer percentile ranking recomputes
+    ratios for every selected company on each call; results are only ever
+    up to CACHE_TTL_SECONDS stale (cache-aside, not invalidation-based).
+    """
     if not payload.company_ids:
         raise HTTPException(status_code=400, detail="Must provide at least one company_id to compare.")
+
+    cache_key = _cache_key(payload.company_ids)
+    cached = cache_get(cache_key, cache_type="compare")
+    if cached is not None:
+        return PeerCompareResponse(**cached)
 
     companies = (await db.execute(select(Company).filter(Company.id.in_(payload.company_ids)))).scalars().all()
     if not companies:
@@ -103,4 +119,7 @@ async def compare_companies(payload: CompareRequest, db: AsyncSession = Depends(
             }
 
     typed_summaries = [CompanyMetricSummary(**item) for item in ranked_summaries]
-    return PeerCompareResponse(companies=typed_summaries, summary_stats=summary_stats)
+    response = PeerCompareResponse(companies=typed_summaries, summary_stats=summary_stats)
+
+    cache_set(cache_key, response.model_dump(mode="json"), settings.CACHE_TTL_SECONDS, cache_type="compare")
+    return response

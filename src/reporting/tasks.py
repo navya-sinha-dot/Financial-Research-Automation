@@ -3,6 +3,7 @@
 import contextlib
 import logging
 import os
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -10,6 +11,7 @@ import httpx
 
 from src.core.celery_app import celery_app
 from src.core.config import settings
+from src.core.metrics import REPORT_GENERATION_DURATION_SECONDS, REPORT_GENERATION_TOTAL
 from src.reporting.charts import (
     generate_margins_chart,
     generate_peer_comparison_chart,
@@ -77,6 +79,7 @@ def generate_report_task(self, job_id: int, company_id: int) -> dict[str, Any]:
     Talks to the database ONLY via FastAPI endpoints.
     """
     logger.info(f"[Task {self.request.id}] Starting PPTX report generation for Job #{job_id}, Company #{company_id}")
+    _started_at = time.monotonic()
 
     try:
         # Step 1: Update job status to PROCESSING via API
@@ -165,6 +168,8 @@ def generate_report_task(self, job_id: int, company_id: int) -> dict[str, Any]:
             except Exception:
                 pass
 
+        REPORT_GENERATION_TOTAL.labels(status="COMPLETED").inc()
+        REPORT_GENERATION_DURATION_SECONDS.observe(time.monotonic() - _started_at)
         return {
             "job_id": job_id,
             "status": "COMPLETED",
@@ -182,4 +187,6 @@ def generate_report_task(self, job_id: int, company_id: int) -> dict[str, Any]:
                     "error_message": str(exc),
                 },
             )
+        REPORT_GENERATION_TOTAL.labels(status="FAILED").inc()
+        REPORT_GENERATION_DURATION_SECONDS.observe(time.monotonic() - _started_at)
         return {"job_id": job_id, "status": "FAILED", "error": str(exc)}
