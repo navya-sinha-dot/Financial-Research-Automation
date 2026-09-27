@@ -2,33 +2,50 @@
 from __future__ import annotations
 
 import logging
-import re
 from datetime import date
-from typing import Any, Dict, Iterable
+from typing import Any, Dict, List, Optional
+
+from bs4 import BeautifulSoup
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
 
 from src.core.config import settings
-from src.core.constants import DEBUG_DIR
-from src.ingestion.browser import create_page, save_debug_html, save_debug_screenshot, close_browser
+from src.ingestion.browser import create_page, save_debug_html, save_debug_screenshot, close_browser, human_delay
 from src.ingestion.captcha_handler import handle_captcha
-from src.ingestion.filing_discovery import discover_latest_filing
+from src.ingestion.filing_discovery import discover_recent_filings
 from src.ingestion.normalizer import normalize_financial_value
-from src.ingestion.parser import parse_financial_statements
 
 logger = logging.getLogger(__name__)
 
 
-def open_filing(url: str):
-    page = create_page()
-    page.goto(url, wait_until="domcontentloaded", timeout=int(getattr(settings, "SCRAPER_TIMEOUT", 30000)))
+def open_filing(url: str, page=None):
+    """Navigates to a filing URL, creating a new page if one isn't supplied.
+
+    Passing an existing `page` lets multi-quarter backfill reuse a single
+    browser context/tab across filings instead of relaunching per filing.
+    """
+    page = page or create_page()
+    _goto_with_retry(page, url)
     logger.info("[BROWSER] goto(%s)", url)
     save_debug_screenshot("01_sec_page.png", page)
     return page
+
+
+@retry(
+    retry=retry_if_exception_type(PlaywrightTimeoutError),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential_jitter(initial=2, max=20),
+    reraise=True,
+)
+def _goto_with_retry(page, url: str) -> None:
+    page.goto(url, wait_until="domcontentloaded", timeout=int(getattr(settings, "SCRAPER_TIMEOUT", 30000)))
 
 
 def wait_for_filing(page, *, timeout: int = 30000) -> None:
     page.wait_for_load_state("networkidle", timeout=timeout)
     if handle_captcha(page, is_demo=str(getattr(settings, "SCRAPER_HEADLESS", "false")).lower() == "false"):
         logger.info("[BROWSER] challenge cleared")
+    human_delay()
     logger.info("[BROWSER] page loaded")
     save_debug_screenshot("02_filing_loaded.png", page)
 
@@ -50,28 +67,26 @@ def locate_cash_flow_statement(page):
 
 
 def extract_table(page, table_text_hint: str):
-    html = page.content()
-    matches = re.findall(r"<table[^>]*>(.*?)</table>", html, flags=re.IGNORECASE | re.DOTALL)
-    for table in matches:
-        if table_text_hint.lower() in table.lower():
+    soup = BeautifulSoup(page.content(), "lxml")
+    hint = table_text_hint.lower()
+    tables = soup.find_all("table")
+    for table in tables:
+        if hint in table.get_text(" ").lower():
             return table
-    if matches:
-        return matches[0]
+    if tables:
+        return tables[0]
     raise ValueError(f"Could not locate table for {table_text_hint}.")
 
 
 def extract_financial_rows(page, table_text_hint: str) -> Dict[str, Any]:
-    table_html = extract_table(page, table_text_hint)
-    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, flags=re.IGNORECASE | re.DOTALL)
+    table = extract_table(page, table_text_hint)
     result: Dict[str, Any] = {}
-    for row in rows:
-        cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, flags=re.IGNORECASE | re.DOTALL)
+    for row in table.find_all("tr"):
+        cells = row.find_all(["td", "th"])
         if len(cells) < 2:
             continue
-        label = re.sub(r"<.*?>", "", cells[0])
-        value = re.sub(r"<.*?>", "", cells[1])
-        label = re.sub(r"\s+", " ", label).strip()
-        value = re.sub(r"\s+", " ", value).strip()
+        label = " ".join(cells[0].get_text(" ").split())
+        value = " ".join(cells[1].get_text(" ").split())
         if label and value:
             result[label] = value
     return result
@@ -81,20 +96,17 @@ def extract_financial_value(raw_text: str) -> float | None:
     return normalize_financial_value(raw_text)
 
 
-def scrape_filing(ticker: str, filing_url: str, *, demo: bool = False) -> Dict[str, Any]:
-    logger.info("[1/10] Resolving company")
-    info = discover_latest_filing(ticker)
-    logger.info("[OK] %s", info["company_name"])
+def scrape_filing(ticker: str, filing_url: str, *, demo: bool = False, page=None, keep_open: bool = False) -> Dict[str, Any]:
+    """Scrapes a single filing. Pass `page` + `keep_open=True` to reuse a
+    browser tab across multiple filings during historical backfill instead
+    of paying the launch/context cost for every quarter.
+    """
+    logger.info("[3/10] Opening filing for %s (%s)", ticker.upper(), "reused tab" if page is not None else "new browser")
+    active_page = open_filing(filing_url, page=page)
+    logger.info("[OK] Browser ready")
 
-    logger.info("[2/10] Finding latest 10-Q")
-    logger.info("[OK] %s found", info["filing_type"])
-
-    logger.info("[3/10] Launching Chromium")
-    page = open_filing(filing_url)
-    logger.info("[OK] Browser started")
-
-    logger.info("[4/10] Opening filing")
-    wait_for_filing(page)
+    logger.info("[4/10] Waiting for filing to render")
+    wait_for_filing(active_page)
     logger.info("[OK] Filing loaded")
 
     statements: Dict[str, Dict[str, Any]] = {"income_statement": {}, "balance_sheet": {}, "cash_flow": {}}
@@ -105,7 +117,7 @@ def scrape_filing(ticker: str, filing_url: str, *, demo: bool = False) -> Dict[s
         ("[7/10] Scraping Cash Flow", "CONSOLIDATED STATEMENTS OF CASH FLOWS", "cash_flow"),
     ]:
         logger.info(step_name)
-        raw_rows = extract_financial_rows(page, hint)
+        raw_rows = extract_financial_rows(active_page, hint)
         if not raw_rows:
             raise ValueError(f"Could not locate the {key} in the filing.")
         for label, raw in raw_rows.items():
@@ -113,17 +125,17 @@ def scrape_filing(ticker: str, filing_url: str, *, demo: bool = False) -> Dict[s
             if normalized is not None:
                 statements[key][label] = normalized
         logger.info("[OK] %s extracted", key.replace("_", " ").title())
-        save_debug_screenshot(f"{key}.png" if key in {"income_statement", "balance_sheet", "cash_flow"} else "debug.png", page)
+        human_delay()
 
-    html = page.content()
+    html = active_page.content()
     save_debug_html("filing_content.html", html)
-    close_browser()
-    logger.info("[10/10] Closing browser")
+
+    if not keep_open:
+        close_browser()
+        logger.info("[10/10] Closing browser")
+
     return {
-        "company": info["company_name"],
         "ticker": ticker.upper(),
-        "cik": info["cik"],
-        "filing": info,
         "statements": {**statements},
     }
 
@@ -136,26 +148,51 @@ def _infer_period(period_of_report: str) -> tuple[str, int]:
 
 
 def fetch_company_financials(ticker: str) -> Dict[str, Any]:
-    """Compatibility wrapper for the old ingestion API.
+    """Scrapes multiple recent SEC filings (historical backfill) so ratio
+    analytics (YoY/QoQ) have real multi-quarter data instead of one snapshot.
 
-    Scrapes the company's latest SEC filing and returns it in the shape the
-    ingestion task expects. Raises if the filing cannot be found or parsed —
-    there is no synthetic fallback data.
+    Reuses a single browser tab across filings for speed, and raises if no
+    filing can be found or parsed -- there is no synthetic fallback data.
     """
-    filing = discover_latest_filing(ticker)
-    result = scrape_filing(ticker, filing["filing_url"], demo=False)
-    period_type, fiscal_year = _infer_period(filing["period_of_report"])
+    limit = int(getattr(settings, "SCRAPER_BACKFILL_QUARTERS", 4))
+    filings = discover_recent_filings(ticker, limit=limit)
+
+    company_name: Optional[str] = None
+    periods: List[Dict[str, Any]] = []
+    page = create_page()
+    try:
+        for i, filing in enumerate(filings):
+            company_name = company_name or filing["company_name"]
+            try:
+                result = scrape_filing(ticker, filing["filing_url"], demo=False, page=page, keep_open=True)
+            except Exception as exc:
+                logger.warning("Skipping filing %s for %s after scrape failure: %s", filing.get("accession_number"), ticker, exc)
+                continue
+
+            period_type, fiscal_year = _infer_period(filing["period_of_report"])
+            periods.append({
+                "period_type": period_type,
+                "fiscal_year": fiscal_year,
+                "report_date": filing["period_of_report"],
+                "items": {
+                    **result["statements"].get("income_statement", {}),
+                    **result["statements"].get("balance_sheet", {}),
+                    **result["statements"].get("cash_flow", {}),
+                },
+            })
+            if i < len(filings) - 1:
+                human_delay(1000, 2500)
+    finally:
+        close_browser()
+
+    if not periods:
+        raise ValueError(f"No filings could be scraped for {ticker}.")
+
+    # Chronological order (oldest first) so YoY/QoQ growth math lines up.
+    periods.sort(key=lambda p: p["report_date"])
+
     return {
         "ticker": ticker.upper(),
-        "name": filing["company_name"],
-        "periods": [{
-            "period_type": period_type,
-            "fiscal_year": fiscal_year,
-            "report_date": filing["period_of_report"],
-            "items": {
-                **result["statements"].get("income_statement", {}),
-                **result["statements"].get("balance_sheet", {}),
-                **result["statements"].get("cash_flow", {}),
-            },
-        }],
+        "name": company_name or f"{ticker.upper()} Corporation",
+        "periods": periods,
     }

@@ -16,13 +16,20 @@ class Settings(BaseSettings):
 
     SEC_USER_AGENT: str = "FinancialResearchAutomation/1.0 contact@example.com"
     SEC_REQUEST_DELAY: float = 1.0
+    SEC_REQUEST_JITTER: float = 0.6
     SEC_TIMEOUT: int = 30
+    SEC_MAX_RETRIES: int = 4
+    SEC_CACHE_TTL_SECONDS: int = 86400
 
     SCRAPER_HEADLESS: bool = False
     SCRAPER_SLOW_MO: int = 500
     SCRAPER_TIMEOUT: int = 30000
     SCRAPER_SCREENSHOTS: bool = True
     SCRAPER_SAVE_HTML: bool = True
+    SCRAPER_MAX_RETRIES: int = 3
+    SCRAPER_MIN_DELAY_MS: int = 250
+    SCRAPER_MAX_DELAY_MS: int = 900
+    SCRAPER_BACKFILL_QUARTERS: int = 4
 
     DATABASE_URL: str = "sqlite:///./data/fra.db"
 

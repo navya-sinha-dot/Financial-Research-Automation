@@ -19,6 +19,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
+# Install the Chromium browser + its OS-level dependencies for Playwright.
+# Without this the ingestion pipeline builds fine but fails at runtime the
+# moment it tries to launch a browser inside the container.
+RUN python -m playwright install --with-deps chromium
+
 # Copy application source code and migrations
 COPY src/ /app/src/
 COPY alembic/ /app/alembic/
