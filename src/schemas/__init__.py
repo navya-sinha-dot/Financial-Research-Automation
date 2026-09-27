@@ -3,7 +3,7 @@ from src.schemas.analytics import (
     CompareRequest,
     PeerCompareResponse,
 )
-from src.schemas.company import CompanyBase, CompanyCreate, CompanyResponse
+from src.schemas.company import CompanyBase, CompanyCreate, CompanyResponse, PaginatedCompanyResponse
 from src.schemas.financial import (
     CompanyFinancialsResponse,
     ComputedRatioResponse,
@@ -20,6 +20,7 @@ __all__ = [
     "CompanyBase",
     "CompanyCreate",
     "CompanyResponse",
+    "PaginatedCompanyResponse",
     "LineItemResponse",
     "ComputedRatioResponse",
     "FinancialPeriodResponse",

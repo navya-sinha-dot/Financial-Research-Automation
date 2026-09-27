@@ -9,6 +9,11 @@ httpx>=0.27.0
 sqlalchemy>=2.0.28
 alembic>=1.13.1
 psycopg2-binary>=2.9.9
+asyncpg>=0.29.0
+aiosqlite>=0.20.0
+
+# API hardening
+slowapi>=0.1.9
 
 # Async Task Queue
 celery>=5.3.6

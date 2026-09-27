@@ -1,11 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from src.analytics.metrics import compute_period_ratios
-from src.core.database import get_db
+from src.api.security import require_api_key
+from src.core.database import get_async_db
 from src.models.company import Company
 from src.models.financial import ComputedRatio, FinancialPeriod
-from src.schemas.company import CompanyCreate, CompanyResponse
+from src.schemas.company import CompanyCreate, CompanyResponse, PaginatedCompanyResponse
 from src.schemas.financial import (
     CompanyFinancialsResponse,
     ComputedRatioResponse,
@@ -16,16 +19,28 @@ from src.schemas.financial import (
 router = APIRouter(prefix="/companies", tags=["Companies"])
 
 
-@router.get("", response_model=list[CompanyResponse])
-def list_companies(db: Session = Depends(get_db)):
-    """Retrieve all tracked companies."""
-    return db.query(Company).order_by(Company.ticker).all()
+@router.get("", response_model=PaginatedCompanyResponse)
+async def list_companies(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Retrieve tracked companies, paginated."""
+    total = (await db.execute(select(func.count()).select_from(Company))).scalar_one()
+    result = await db.execute(select(Company).order_by(Company.ticker).offset(skip).limit(limit))
+    companies = [CompanyResponse.model_validate(c) for c in result.scalars().all()]
+    return PaginatedCompanyResponse(items=companies, total=total, skip=skip, limit=limit)
 
 
-@router.post("", response_model=CompanyResponse, status_code=status.HTTP_201_CREATED)
-def create_company(payload: CompanyCreate, db: Session = Depends(get_db)):
+@router.post(
+    "",
+    response_model=CompanyResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_api_key)],
+)
+async def create_company(payload: CompanyCreate, db: AsyncSession = Depends(get_async_db)):
     """Register a new company."""
-    existing = db.query(Company).filter_by(ticker=payload.ticker.upper()).first()
+    existing = (await db.execute(select(Company).filter_by(ticker=payload.ticker.upper()))).scalar_one_or_none()
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -38,27 +53,31 @@ def create_company(payload: CompanyCreate, db: Session = Depends(get_db)):
         exchange=payload.exchange,
     )
     db.add(company)
-    db.commit()
-    db.refresh(company)
+    await db.commit()
+    await db.refresh(company)
     return company
 
 
 @router.get("/{company_id}/financials", response_model=CompanyFinancialsResponse)
-def get_company_financials(company_id: int, db: Session = Depends(get_db)):
+async def get_company_financials(company_id: int, db: AsyncSession = Depends(get_async_db)):
     """Retrieve all quarterly financial periods and key-value line items for a company."""
-    company = db.query(Company).filter_by(id=company_id).first()
+    company = (await db.execute(select(Company).filter_by(id=company_id))).scalar_one_or_none()
     if not company:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Company with ID {company_id} not found.",
         )
 
-    periods = (
-        db.query(FinancialPeriod)
+    result = await db.execute(
+        select(FinancialPeriod)
         .filter_by(company_id=company.id)
+        .options(
+            selectinload(FinancialPeriod.line_items),
+            selectinload(FinancialPeriod.computed_ratios),
+        )
         .order_by(FinancialPeriod.fiscal_year.asc(), FinancialPeriod.period_type.asc())
-        .all()
     )
+    periods = result.scalars().all()
 
     periods_response = []
     for p in periods:
@@ -94,21 +113,22 @@ def get_company_financials(company_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{company_id}/ratios")
-def get_company_ratios(company_id: int, db: Session = Depends(get_db)):
+async def get_company_ratios(company_id: int, db: AsyncSession = Depends(get_async_db)):
     """Retrieve or compute financial ratios (YoY/QoQ growth, margins, ROE, current ratio)."""
-    company = db.query(Company).filter_by(id=company_id).first()
+    company = (await db.execute(select(Company).filter_by(id=company_id))).scalar_one_or_none()
     if not company:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Company with ID {company_id} not found.",
         )
 
-    periods = (
-        db.query(FinancialPeriod)
+    result = await db.execute(
+        select(FinancialPeriod)
         .filter_by(company_id=company.id)
+        .options(selectinload(FinancialPeriod.line_items))
         .order_by(FinancialPeriod.fiscal_year.asc(), FinancialPeriod.report_date.asc())
-        .all()
     )
+    periods = result.scalars().all()
 
     # Format periods data for pure analytics computation
     periods_data = []
@@ -131,19 +151,17 @@ def get_company_ratios(company_id: int, db: Session = Depends(get_db)):
         period_id = record.get("period_id")
         computed = record.get("computed_ratios", {})
         for r_name, r_val in computed.items():
-            if r_val is not None:
-                ratio_row = db.query(ComputedRatio).filter_by(period_id=period_id, ratio_name=r_name).first()
-                if not ratio_row:
-                    ratio_row = ComputedRatio(
-                        period_id=period_id,
-                        ratio_name=r_name,
-                        value=r_val,
-                    )
-                    db.add(ratio_row)
-                else:
-                    ratio_row.value = r_val
+            if r_val is None:
+                continue
+            ratio_row = (
+                await db.execute(select(ComputedRatio).filter_by(period_id=period_id, ratio_name=r_name))
+            ).scalar_one_or_none()
+            if not ratio_row:
+                db.add(ComputedRatio(period_id=period_id, ratio_name=r_name, value=r_val))
+            else:
+                ratio_row.value = r_val
 
-    db.commit()
+    await db.commit()
 
     return {
         "company_id": company.id,

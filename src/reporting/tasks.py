@@ -20,6 +20,14 @@ from src.reporting.pptx_builder import create_investor_report_presentation
 logger = logging.getLogger(__name__)
 
 
+def _api_key_headers() -> dict[str, str]:
+    """Auth header for calling back into the API-key-gated write endpoints.
+
+    Empty when settings.API_KEY is unset, matching the API's own opt-in auth.
+    """
+    return {"X-API-Key": settings.API_KEY} if settings.API_KEY else {}
+
+
 def _call_api(method: str, endpoint: str, json_data: dict[str, Any] | None = None) -> Any:
     """Helper to communicate with FastAPI.
 
@@ -29,20 +37,22 @@ def _call_api(method: str, endpoint: str, json_data: dict[str, Any] | None = Non
     If running under test/eager mode or if HTTP fails, uses in-process TestClient
     to strictly adhere to: 'No direct DB access from the report generator - API only'.
     """
+    headers = _api_key_headers()
+
     if settings.CELERY_TASK_ALWAYS_EAGER or os.environ.get("CELERY_TASK_ALWAYS_EAGER") == "true":
         from fastapi.testclient import TestClient
 
         from src.api.main import app
 
         with TestClient(app) as test_client:
-            resp = test_client.request(method, endpoint, json=json_data)
+            resp = test_client.request(method, endpoint, json=json_data, headers=headers)
             resp.raise_for_status()
             return resp.json()
 
     url = f"{settings.API_BASE_URL}{endpoint}"
     try:
         with httpx.Client(timeout=5.0) as client:
-            resp = client.request(method, url, json=json_data)
+            resp = client.request(method, url, json=json_data, headers=headers)
             resp.raise_for_status()
             return resp.json()
     except Exception as http_err:
@@ -55,7 +65,7 @@ def _call_api(method: str, endpoint: str, json_data: dict[str, Any] | None = Non
         from src.api.main import app
 
         with TestClient(app) as test_client:
-            resp = test_client.request(method, endpoint, json=json_data)
+            resp = test_client.request(method, endpoint, json=json_data, headers=headers)
             resp.raise_for_status()
             return resp.json()
 
@@ -96,7 +106,8 @@ def generate_report_task(self, job_id: int, company_id: int) -> dict[str, Any]:
                 p["items"] = {item["item_name"]: item["value"] for item in p["line_items"]}
 
         # Step 4: Fetch peer companies for benchmark comparison via API
-        all_companies = _call_api("GET", "/companies")
+        all_companies_page = _call_api("GET", "/companies?limit=200")
+        all_companies = all_companies_page.get("items", [])
         peer_ids = [c["id"] for c in all_companies if c["id"] != company_id][:4]
         compare_ids = [company_id] + peer_ids
         peer_data = _call_api("POST", "/compare", {"company_ids": compare_ids})
