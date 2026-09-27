@@ -260,7 +260,14 @@ src/
 alembic/       # Database migrations
 scripts/       # CLI entry points (run_pipeline.py, start_app.py)
 tests/         # pytest suite
+docs/          # Plain-language project docs (overview, architecture, interview prep)
 ```
+
+## Documentation
+
+The [`docs/`](docs/README.md) folder has the full project write-up in
+simple language: project overview, tech stack, architecture, a tour of the
+code, future scope, and an interview-prep Q&A (technical + business).
 
 ## Limitations
 
