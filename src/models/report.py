@@ -1,11 +1,13 @@
 import enum
-from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum
+from datetime import UTC, datetime
+
+from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
+
 from src.core.database import Base
 
 
-class ReportStatus(str, enum.Enum):
+class ReportStatus(enum.StrEnum):
     PENDING = "PENDING"
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
@@ -17,8 +19,8 @@ class ReportJob(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
-    status = Column(Enum(ReportStatus), default=ReportStatus.PENDING, nullable=False, index=True)
-    requested_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    status: Column[ReportStatus] = Column(Enum(ReportStatus), default=ReportStatus.PENDING, nullable=False, index=True)
+    requested_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
     completed_at = Column(DateTime, nullable=True)
     output_path = Column(String(500), nullable=True)
     error_message = Column(String(1000), nullable=True)

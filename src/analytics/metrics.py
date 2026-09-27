@@ -10,15 +10,17 @@ Contains pure mathematical and statistical computations for financial metrics:
 
 Contains NO database or UI dependencies.
 """
+
 import math
-from typing import Dict, List, Optional, Any
+from typing import Any
+
 import numpy as np
 import pandas as pd
 
 
-def compute_growth(current: Optional[float], previous: Optional[float]) -> Optional[float]:
+def compute_growth(current: float | None, previous: float | None) -> float | None:
     """Computes growth rate between two values.
-    
+
     Returns (current - previous) / abs(previous), or None if previous is invalid or zero.
     """
     if current is None or previous is None:
@@ -33,7 +35,7 @@ def compute_growth(current: Optional[float], previous: Optional[float]) -> Optio
         return None
 
 
-def compute_net_margin(net_income: Optional[float], revenue: Optional[float]) -> Optional[float]:
+def compute_net_margin(net_income: float | None, revenue: float | None) -> float | None:
     """Computes Net Profit Margin: Net Income / Revenue."""
     if net_income is None or revenue is None:
         return None
@@ -47,7 +49,7 @@ def compute_net_margin(net_income: Optional[float], revenue: Optional[float]) ->
         return None
 
 
-def compute_roe(net_income: Optional[float], total_equity: Optional[float]) -> Optional[float]:
+def compute_roe(net_income: float | None, total_equity: float | None) -> float | None:
     """Computes Return on Equity (ROE): Net Income / Total Stockholders' Equity."""
     if net_income is None or total_equity is None:
         return None
@@ -61,7 +63,7 @@ def compute_roe(net_income: Optional[float], total_equity: Optional[float]) -> O
         return None
 
 
-def compute_current_ratio(current_assets: Optional[float], current_liabilities: Optional[float]) -> Optional[float]:
+def compute_current_ratio(current_assets: float | None, current_liabilities: float | None) -> float | None:
     """Computes Current Ratio: Current Assets / Current Liabilities."""
     if current_assets is None or current_liabilities is None:
         return None
@@ -75,17 +77,15 @@ def compute_current_ratio(current_assets: Optional[float], current_liabilities: 
         return None
 
 
-def compute_period_ratios(
-    periods_records: List[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
+def compute_period_ratios(periods_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Takes a chronological list of financial period dictionaries for a single company.
-    
+
     Each dictionary is expected to have:
     - 'fiscal_year': int
     - 'period_type': str (e.g. 'Q1', 'Q2', 'Q3', 'Q4')
     - 'report_date': date or str
     - 'items': Dict[str, float] containing line items like 'revenue', 'net_income', etc.
-    
+
     Returns a new list of records enriched with computed ratios:
     - yoy_growth
     - qoq_growth
@@ -128,12 +128,8 @@ def compute_period_ratios(
     df["yoy_growth"] = df["revenue"].pct_change(periods=4)
 
     # Compute static ratios
-    df["net_margin"] = df.apply(
-        lambda r: compute_net_margin(r["net_income"], r["revenue"]), axis=1
-    )
-    df["roe"] = df.apply(
-        lambda r: compute_roe(r["net_income"], r["total_equity"]), axis=1
-    )
+    df["net_margin"] = df.apply(lambda r: compute_net_margin(r["net_income"], r["revenue"]), axis=1)
+    df["roe"] = df.apply(lambda r: compute_roe(r["net_income"], r["total_equity"]), axis=1)
     df["current_ratio"] = df.apply(
         lambda r: compute_current_ratio(r["current_assets"], r["current_liabilities"]), axis=1
     )
@@ -143,7 +139,7 @@ def compute_period_ratios(
     for _, row in df.iterrows():
         p_idx = int(row["period_index"])
         orig_p = dict(periods_records[p_idx])
-        
+
         computed = {
             "yoy_growth": float(row["yoy_growth"]) if pd.notnull(row["yoy_growth"]) else None,
             "qoq_growth": float(row["qoq_growth"]) if pd.notnull(row["qoq_growth"]) else None,
@@ -158,16 +154,16 @@ def compute_period_ratios(
 
 
 def compute_peer_percentiles(
-    companies_data: List[Dict[str, Any]],
-    metric_keys: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
+    companies_data: list[dict[str, Any]],
+    metric_keys: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """Calculates peer percentile rankings for a set of companies across given metrics.
-    
+
     Each company dict should contain:
     - 'company_id': int
     - 'ticker': str
     - metrics like 'net_margin', 'roe', 'current_ratio', 'yoy_growth'
-    
+
     Returns the list enriched with 'percentile_rankings': Dict[str, float] (0.0 to 100.0).
     """
     if not companies_data:
@@ -177,7 +173,7 @@ def compute_peer_percentiles(
         metric_keys = ["net_margin", "roe", "current_ratio", "yoy_growth", "latest_revenue"]
 
     df = pd.DataFrame(companies_data)
-    
+
     # Calculate percentile rank (0 to 100) for each metric
     rank_df = pd.DataFrame(index=df.index)
     for m in metric_keys:

@@ -1,13 +1,14 @@
 """Unit tests for the reporting layer: Matplotlib charts and PPTX presentation assembly."""
+
 from datetime import date
-from pathlib import Path
+
 import pytest
 from pptx import Presentation
 
 from src.reporting.charts import (
-    generate_revenue_trend_chart,
     generate_margins_chart,
     generate_peer_comparison_chart,
+    generate_revenue_trend_chart,
 )
 from src.reporting.pptx_builder import create_investor_report_presentation
 

@@ -1,0 +1,54 @@
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = [
+    "B008",   # FastAPI's Depends(...) as a default argument is the documented pattern
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+"scripts/*" = ["E402"]  # sys.path manipulation must precede these imports
+"src/dashboard/app.py" = ["E402"]  # same: sys.path fix-up before project imports for `streamlit run`
+
+[tool.black]
+line-length = 120
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+disallow_untyped_defs = false
+exclude = "^(alembic/|tests/)"
+
+[[tool.mypy.overrides]]
+module = "src.analytics.*"
+disallow_untyped_defs = true
+
+# Models use SQLAlchemy's classic declarative style (Column(...) class attrs)
+# rather than 2.0-style `Mapped[T]` annotations, so mypy sees instance
+# attributes as Column[T] instead of T at every read/write site. The real
+# fix is migrating to typed `Mapped[]`/`mapped_column()` models, planned as
+# part of the async SQLAlchemy migration; until then these modules are
+# exempted from the resulting false-positive assignment/arg-type noise.
+[[tool.mypy.overrides]]
+module = [
+    "src.models.*",
+    "src.api.routers.reports",
+    "src.ingestion.tasks",
+]
+disable_error_code = ["assignment", "arg-type"]
+
+[tool.pytest.ini_options]
+addopts = "--cov=src --cov-report=term-missing --cov-report=xml --cov-fail-under=75"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["src/dashboard/*"]
