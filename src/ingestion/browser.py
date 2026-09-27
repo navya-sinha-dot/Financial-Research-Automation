@@ -1,32 +1,32 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 import random
 import time
 from pathlib import Path
-from typing import List, Optional
 
-from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Page, Playwright, ViewportSize, sync_playwright
 
 from src.core.config import settings
 from src.core.constants import DEBUG_DIR
 
 logger = logging.getLogger(__name__)
 
-_playwright: Optional[Playwright] = None
-_browser: Optional[Browser] = None
-_contexts: List[BrowserContext] = []
+_playwright: Playwright | None = None
+_browser: Browser | None = None
+_contexts: list[BrowserContext] = []
 
 # Realistic, current desktop Chrome UA strings to rotate through. Avoids the
 # single static User-Agent that automation frameworks default to.
 _USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",  # noqa: E501
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
 ]
 
 # Common desktop viewport sizes; picking from a pool beats one fixed size.
-_VIEWPORTS = [
+_VIEWPORTS: list[ViewportSize] = [
     {"width": 1440, "height": 900},
     {"width": 1536, "height": 864},
     {"width": 1920, "height": 1080},
@@ -96,7 +96,7 @@ def create_page() -> Page:
     return page
 
 
-def human_delay(min_ms: Optional[int] = None, max_ms: Optional[int] = None) -> None:
+def human_delay(min_ms: int | None = None, max_ms: int | None = None) -> None:
     """Sleeps a short, randomized interval to avoid a robotic fixed-cadence request pattern."""
     lo = min_ms if min_ms is not None else int(getattr(settings, "SCRAPER_MIN_DELAY_MS", 250))
     hi = max_ms if max_ms is not None else int(getattr(settings, "SCRAPER_MAX_DELAY_MS", 900))
@@ -108,10 +108,8 @@ def human_delay(min_ms: Optional[int] = None, max_ms: Optional[int] = None) -> N
 def close_browser() -> None:
     global _browser, _playwright, _contexts
     for context in _contexts:
-        try:
+        with contextlib.suppress(Exception):
             context.close()
-        except Exception:
-            pass
     _contexts = []
     if _browser is not None:
         _browser.close()

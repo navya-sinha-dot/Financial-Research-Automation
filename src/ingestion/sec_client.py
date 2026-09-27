@@ -5,7 +5,7 @@ import json
 import logging
 import random
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
@@ -26,7 +26,7 @@ class SECRequestError(SECClientError):
 
 class SECClient:
     def __init__(self, user_agent: str | None = None):
-        self.user_agent = user_agent or getattr(settings, "SEC_USER_AGENT", DEFAULT_SEC_USER_AGENT)
+        self.user_agent: str = user_agent or str(getattr(settings, "SEC_USER_AGENT", DEFAULT_SEC_USER_AGENT))
         self.base_url = "https://www.sec.gov"
         self._last_request: float = 0.0
         self._cache_dir = CACHE_DIR
@@ -71,7 +71,7 @@ class SECClient:
         digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
         return f"{digest}.json"
 
-    def _read_cache(self, url: str) -> Optional[Any]:
+    def _read_cache(self, url: str) -> Any | None:
         cache_file = self._cache_dir / self._cache_key(url)
         if not cache_file.exists():
             return None
@@ -92,7 +92,7 @@ class SECClient:
         envelope = {"cached_at": time.time(), "payload": payload}
         cache_file.write_text(json.dumps(envelope, default=str), encoding="utf-8")
 
-    def company_search(self, ticker: str) -> Dict[str, Any]:
+    def company_search(self, ticker: str) -> dict[str, Any]:
         ticker = ticker.upper().strip()
         cache_key = f"https://www.sec.gov/cgi-bin/browse-edgar?CIK={ticker}&owner=exclude&action=getcompany&match=&start=0&count=20"
         cached = self._read_cache(cache_key)
@@ -122,7 +122,7 @@ class SECClient:
                 return f"{int(company['cik_str']):010d}"
         raise SECClientError(f"Could not find SEC CIK for ticker {ticker}.")
 
-    def _build_filing(self, payload: Dict[str, Any], ticker: str, cik: str, index: int, form: str) -> Dict[str, Any]:
+    def _build_filing(self, payload: dict[str, Any], ticker: str, cik: str, index: int, form: str) -> dict[str, Any]:
         recent = payload["filings"]["recent"]
         accession = recent["accessionNumber"][index]
         accession_path = accession.replace("-", "")
@@ -138,7 +138,7 @@ class SECClient:
             "filing_url": f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_path}/{document}",
         }
 
-    def filing_history(self, ticker: str, filing_type: str = "10-Q", limit: int = 4) -> List[Dict[str, Any]]:
+    def filing_history(self, ticker: str, filing_type: str = "10-Q", limit: int = 4) -> list[dict[str, Any]]:
         """Returns up to `limit` of the most recent 10-Q/10-K filings, newest first.
 
         Powers multi-quarter historical backfill so YoY/QoQ analytics have real
@@ -164,6 +164,6 @@ class SECClient:
             raise SECClientError(f"No recent {filing_type} or 10-K filing found for {ticker.upper()}.")
         return filings
 
-    def filing_metadata(self, ticker: str, filing_type: str = "10-Q") -> Dict[str, Any]:
+    def filing_metadata(self, ticker: str, filing_type: str = "10-Q") -> dict[str, Any]:
         """Returns the single most recent filing. Kept for backward compatibility."""
         return self.filing_history(ticker, filing_type=filing_type, limit=1)[0]
