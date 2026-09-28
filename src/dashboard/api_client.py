@@ -66,13 +66,19 @@ class FRAApiClient:
             return None
 
     def request_report(self, company_id: int) -> dict[str, Any] | None:
-        """Request asynchronous report generation for a company."""
+        """Request asynchronous report generation for a company.
+
+        In CELERY_TASK_ALWAYS_EAGER mode (local/demo), this call blocks
+        until the whole report (six API round-trips, three charts, and the
+        PPTX assembly) finishes synchronously -- a short timeout here makes
+        the dashboard report "failed" on a job that actually succeeded.
+        """
         try:
             resp = requests.post(
                 f"{self.base_url}/reports",
                 json={"company_id": company_id},
                 headers=self._write_headers(),
-                timeout=10,
+                timeout=60,
             )
             resp.raise_for_status()
             return resp.json()
