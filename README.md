@@ -12,6 +12,44 @@ running application. Every number in the database was extracted from a real
 10-Q/10-K filing on `sec.gov`; if a scrape fails, the pipeline fails loudly
 instead of silently substituting fake figures.
 
+## Quickstart (no Docker, no Redis)
+
+The fastest way to run this locally with a visible Chromium browser and no
+external services (Postgres/Redis) at all:
+
+```bash
+python -m venv .venv
+. .venv/bin/activate                    # Windows: .venv\Scripts\activate
+
+pip install -r requirements.txt
+python -m playwright install chromium
+
+cp .env.example .env
+# Edit .env and set SEC_USER_AGENT to "AppName/Version your-email@example.com"
+# -- SEC EDGAR requires a descriptive, contactable user agent on every
+# request. Everything else in .env.example already defaults to the
+# no-Redis, visible-browser, SQLite setup below.
+
+python scripts/start_app.py
+```
+
+This starts the API on `http://localhost:8000` and the dashboard on
+`http://localhost:8501`, with `CELERY_TASK_ALWAYS_EAGER=true` (ingestion
+runs synchronously in the API process -- no Redis broker or separate worker
+needed) and `SCRAPER_HEADLESS=false` (the Chromium window scraping the real
+filing is visible). Enter a ticker in the dashboard sidebar to trigger a
+real scrape; the database starts empty and is populated only by real
+ingestion.
+
+**If you edit code under `src/`, restart `python scripts/start_app.py`.**
+It runs `uvicorn` without `--reload`, and in `CELERY_TASK_ALWAYS_EAGER=true`
+mode the ingestion task executes inside that same API process — so a code
+change won't take effect until the process is restarted, even though the
+Streamlit dashboard itself does hot-reload on save.
+
+For a fully headless run (no visible browser, e.g. CI): `python
+scripts/start_app.py --headless`.
+
 ## Architecture
 
 ```mermaid

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+  <head><title>Example 10-Q (fragmented-heading filer, e.g. Microsoft)</title></head>
+  <body>
+    <!-- Cover page checkbox table: must never be mistaken for a real
+         statement table. Real filings put these before the statements. -->
+    <table>
+      <tr><td>&#9744;</td><td>Yes</td></tr>
+      <tr><td>&#9746;</td><td>No</td></tr>
+    </table>
+
+    <!-- Real heading split across two adjacent nodes with NO space between
+         them, matching the real DOM structure found in a live Microsoft
+         10-Q (e.g. "...ITEM 1. FINANCIAL STATEMENTSINCOME STATEMENTS"). -->
+    <span>PART I. FINANCIAL STATEMENTS</span><span>INCOME STATEMENTS</span>
+    <table>
+      <tr><th></th><th>2025</th><th>2024</th></tr>
+      <tr><td>Total revenue</td><td>$65,585</td><td>$61,858</td></tr>
+      <tr><td>Net income</td><td>$24,667</td><td>$21,939</td></tr>
+    </table>
+
+    <!-- A different, later statement that shares the substring "INCOME
+         STATEMENTS" -- must not be picked instead of the plain one above. -->
+    <span>COMPREHENSIVE INCOME STATEMENTS</span>
+    <table>
+      <tr><th></th><th>2025</th><th>2024</th></tr>
+      <tr><td>Net income</td><td>$24,667</td><td>$21,939</td></tr>
+      <tr><td>Other comprehensive income</td><td>$500</td><td>$300</td></tr>
+    </table>
+
+    <span>BALANCE SHEETS</span>
+    <table>
+      <tr><th></th><th>2025</th><th>2024</th></tr>
+      <tr><td>Total current assets</td><td>$150,000</td><td>$140,000</td></tr>
+      <tr><td>Total current liabilities</td><td>$120,000</td><td>$110,000</td></tr>
+    </table>
+
+    <span>CASH FLOWS STATEMENTS</span>
+    <table>
+      <tr><th></th><th>2025</th><th>2024</th></tr>
+      <tr><td>Net cash from operations</td><td>$30,000</td><td>$28,000</td></tr>
+    </table>
+  </body>
+</html>

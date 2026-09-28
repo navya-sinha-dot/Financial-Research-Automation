@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+  <head><title>Example 10-K</title></head>
+  <body>
+    <p>
+      <span>Some unrelated disclosure paragraph that happens to mention our
+      Consolidated Statements of Operations in passing, as part of a much
+      longer sentence describing an accounting standards update and its
+      expected effects on future filings, which should not be mistaken for
+      the actual heading of the statement itself.</span>
+    </p>
+
+    <!-- Table of Contents: lists the heading as a sentence inside a table,
+         appearing BEFORE the real data table. This is the trap. -->
+    <table>
+      <tr><th>Index to Consolidated Financial Statements</th><th>Page</th></tr>
+      <tr>
+        <td>
+          <a href="#stmt-ops">Consolidated Statements of Operations for the years ended</a>
+        </td>
+        <td>29</td>
+      </tr>
+      <tr>
+        <td><a href="#bal-sheet">Consolidated Balance Sheets</a></td>
+        <td>31</td>
+      </tr>
+    </table>
+
+    <!-- The real heading: a short, standalone element, not inside a table. -->
+    <span id="stmt-ops">CONSOLIDATED STATEMENTS OF OPERATIONS</span>
+    <table>
+      <tr><th></th><th>2025</th><th>2024</th></tr>
+      <tr><td>Revenue</td><td>$94,036</td><td>$90,500</td></tr>
+      <tr><td>Net Income</td><td>$(2,345)</td><td>$25,000</td></tr>
+    </table>
+
+    <span id="bal-sheet">CONSOLIDATED BALANCE SHEETS</span>
+    <table>
+      <tr><th></th><th>2025</th><th>2024</th></tr>
+      <tr><td>Total Assets</td><td>365,000</td><td>350,000</td></tr>
+    </table>
+  </body>
+</html>

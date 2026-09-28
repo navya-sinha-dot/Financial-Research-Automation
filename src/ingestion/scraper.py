@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date
 from typing import Any
 
@@ -14,7 +15,7 @@ from src.core.config import settings
 from src.ingestion.browser import close_browser, create_page, human_delay, save_debug_html, save_debug_screenshot
 from src.ingestion.captcha_handler import handle_captcha
 from src.ingestion.filing_discovery import discover_recent_filings
-from src.ingestion.normalizer import normalize_financial_value
+from src.ingestion.normalizer import derive_canonical_line_items, normalize_financial_value
 
 logger = logging.getLogger(__name__)
 
@@ -72,29 +73,175 @@ def locate_cash_flow_statement(page):
     )
 
 
-def extract_table(page, table_text_hint: str):
+def _compact(text: str) -> str:
+    return "".join(text.lower().split())
+
+
+def _text_before_table(table, max_chars: int = 400) -> str:
+    """Concatenates the raw text immediately preceding `table`, stopping the
+    moment a node belongs to an earlier <table> (which structurally rules
+    out Table of Contents entries -- they always sit inside their own
+    table). Nodes are joined with NO separator, matching how they actually
+    render: real filings often split a statement's heading across several
+    adjacent DOM text nodes (e.g. inline XBRL tagging) instead of one clean
+    element, and inserting a space would break the reconstructed phrase.
+    """
+    parts: list[str] = []
+    total = 0
+    for node in table.find_all_previous(string=True):
+        if node.find_parent("table") is not None:
+            break
+        text = str(node)
+        parts.append(text)
+        total += len(text)
+        if total >= max_chars:
+            break
+    return "".join(reversed(parts))
+
+
+# Heading variant -> other variants that must NOT also be present nearby.
+# Guards against e.g. "INCOME STATEMENTS" matching inside the heading for
+# the *comprehensive* income statement, a different table entirely.
+_HEADING_EXCLUSIONS: dict[str, list[str]] = {
+    "incomestatements": ["comprehensiveincomestatements"],
+}
+
+
+_TRAILING_PAREN_RE = re.compile(r"\([^()]*\)$")
+
+
+def _strip_trailing_parentheticals(text: str) -> str:
+    """Strips trailing "(...)" groups, repeatedly.
+
+    Statement headings are routinely followed by a units/unaudited note
+    before the table starts -- e.g. "CONSOLIDATED STATEMENTS OF
+    INCOME(in millions, except per share amounts; unaudited)" -- which
+    would otherwise push the heading past `_hint_is_trailing`'s tolerance.
+    This is a narrow, predictable pattern (a real trailing parenthetical),
+    unlike just widening that tolerance, which would let a long unrelated
+    sentence with normal trailing prose slip back in.
+    """
+    while True:
+        stripped = _TRAILING_PAREN_RE.sub("", text)
+        if stripped == text:
+            return text
+        text = stripped
+
+
+def _hint_is_trailing(hint: str, preceding: str, *, tail_slack: int = 8) -> bool:
+    """True if `hint` is (essentially) the last thing said before the
+    table, not just mentioned somewhere earlier in a longer, unrelated
+    sentence (e.g. a disclosure paragraph that happens to reference the
+    statement's name in passing). `tail_slack` allows a few stray trailing
+    characters (odd punctuation, stray entities) without requiring an exact
+    suffix match.
+    """
+    preceding = _strip_trailing_parentheticals(preceding)
+    idx = preceding.rfind(hint)
+    if idx == -1:
+        return False
+    return len(preceding) - (idx + len(hint)) <= tail_slack
+
+
+def extract_table(page, table_text_hint: str | list[str]):
+    """Finds the data table for a statement heading.
+
+    Real filings use different wording for the same statement -- Apple
+    titles it "CONSOLIDATED STATEMENTS OF OPERATIONS", Microsoft just
+    "INCOME STATEMENTS" -- so `table_text_hint` may be a single string or a
+    list of known variants, checked in order against the text immediately
+    preceding each table (see `_text_before_table`). The match must land at
+    the end of that preceding text (see `_hint_is_trailing`) so a long,
+    unrelated sentence that merely mentions the heading in passing -- e.g.
+    right before a Table of Contents table -- isn't mistaken for it.
+    """
+    hints = [table_text_hint] if isinstance(table_text_hint, str) else list(table_text_hint)
+    compact_hints = [_compact(h) for h in hints]
+
     soup = BeautifulSoup(page.content(), "lxml")
-    hint = table_text_hint.lower()
+    for table in soup.find_all("table"):
+        preceding = _compact(_text_before_table(table))
+        for hint in compact_hints:
+            if not _hint_is_trailing(hint, preceding):
+                continue
+            if any(excluded in preceding for excluded in _HEADING_EXCLUSIONS.get(hint, [])):
+                continue
+            return table
+
+    # Fallback for filings where no heading variant matches at all: search
+    # inside every table directly.
     tables = soup.find_all("table")
     for table in tables:
-        if hint in table.get_text(" ").lower():
+        table_text = _compact(table.get_text(" "))
+        if any(hint in table_text for hint in compact_hints):
             return table
     if tables:
         return tables[0]
-    raise ValueError(f"Could not locate table for {table_text_hint}.")
+    raise ValueError(f"Could not locate table for {hints[0]}.")
 
 
-def extract_financial_rows(page, table_text_hint: str) -> dict[str, Any]:
+_PLACEHOLDER_CELL_VALUES = {"$", "-", "—", "–"}
+
+
+def extract_financial_rows(page, table_text_hint: str | list[str]) -> dict[str, Any]:
+    """Extracts {label: value} rows from a statement table.
+
+    SEC filings don't agree on table layout: Apple's rows are a clean
+    label/value pair (cells[0]/cells[1]), but Microsoft's (and many
+    others') insert spacer and "$"-only cells for alignment
+    (`<td>Label</td><td>&#160;</td><td>$</td><td>65,585</td>`), so blindly
+    taking cells[1] grabs an empty spacer instead of the real number and
+    silently drops every row. Instead, take the first cell after the label
+    that actually has content once spacer/currency-symbol placeholders are
+    ignored -- the most recent period's value, same column Apple's simpler
+    tables already put there.
+
+    Two more real-world quirks this handles:
+    - A negative number's closing parenthesis sometimes lands in its own
+      trailing cell ("(" + "3,660" in the value cell, ")" in the next) --
+      normalize_financial_value() only recognizes a negative when both "("
+      and ")" are present, so the closing paren is reattached here.
+    - The same sub-item label (e.g. "Product", "Service and other") is
+      often reused under two different section headers (Revenue: and Cost
+      of revenue:) with different values. Keying purely by label would let
+      the second silently overwrite the first, so a repeated label is
+      disambiguated with the section header it appeared under.
+    """
     table = extract_table(page, table_text_hint)
     result: dict[str, Any] = {}
+    section = ""
     for row in table.find_all("tr"):
         cells = row.find_all(["td", "th"])
         if len(cells) < 2:
             continue
         label = " ".join(cells[0].get_text(" ").split())
-        value = " ".join(cells[1].get_text(" ").split())
-        if label and value:
-            result[label] = value
+        if not label:
+            continue
+
+        value = ""
+        for idx in range(1, len(cells)):
+            candidate = " ".join(cells[idx].get_text(" ").split())
+            if candidate and candidate not in _PLACEHOLDER_CELL_VALUES:
+                value = candidate
+                if "(" in value and ")" not in value:
+                    for trailing_cell in cells[idx + 1 :]:
+                        trailing_text = " ".join(trailing_cell.get_text(" ").split())
+                        if trailing_text:
+                            value += trailing_text
+                            break
+                break
+
+        if not value:
+            # A label with no value at all is a section header (e.g.
+            # "Revenue:", "Cost of revenue:"), not a data row.
+            if label.endswith(":"):
+                section = label.rstrip(":").strip()
+            continue
+
+        key = label
+        if key in result and section:
+            key = f"{section} - {label}"
+        result[key] = value
     return result
 
 
@@ -119,15 +266,44 @@ def scrape_filing(
     wait_for_filing(active_page)
     logger.info("[OK] Filing loaded")
 
+    # Save the raw HTML immediately, before attempting extraction. If
+    # extraction fails below, this is the artifact you need to diagnose why
+    # -- saving it only on success would mean it's missing exactly when
+    # you need it most.
+    save_debug_html("filing_content.html", active_page.content())
+
     statements: dict[str, dict[str, Any]] = {"income_statement": {}, "balance_sheet": {}, "cash_flow": {}}
 
-    for step_name, hint, key in [
-        ("[5/10] Scraping Income Statement", "CONSOLIDATED STATEMENTS OF OPERATIONS", "income_statement"),
-        ("[6/10] Scraping Balance Sheet", "CONSOLIDATED BALANCE SHEETS", "balance_sheet"),
-        ("[7/10] Scraping Cash Flow", "CONSOLIDATED STATEMENTS OF CASH FLOWS", "cash_flow"),
+    for step_name, hints, key in [
+        (
+            "[5/10] Scraping Income Statement",
+            [
+                "CONSOLIDATED STATEMENTS OF OPERATIONS",
+                "CONSOLIDATED STATEMENTS OF INCOME",
+                "STATEMENTS OF OPERATIONS",
+                "STATEMENTS OF INCOME",
+                "INCOME STATEMENTS",
+            ],
+            "income_statement",
+        ),
+        (
+            "[6/10] Scraping Balance Sheet",
+            ["CONSOLIDATED BALANCE SHEETS", "BALANCE SHEETS", "STATEMENTS OF FINANCIAL POSITION"],
+            "balance_sheet",
+        ),
+        (
+            "[7/10] Scraping Cash Flow",
+            [
+                "CONSOLIDATED STATEMENTS OF CASH FLOWS",
+                "STATEMENTS OF CASH FLOWS",
+                "CASH FLOWS STATEMENTS",
+                "CASH FLOW STATEMENTS",
+            ],
+            "cash_flow",
+        ),
     ]:
         logger.info(step_name)
-        raw_rows = extract_financial_rows(active_page, hint)
+        raw_rows = extract_financial_rows(active_page, hints)
         if not raw_rows:
             raise ValueError(f"Could not locate the {key} in the filing.")
         for label, raw in raw_rows.items():
@@ -136,9 +312,6 @@ def scrape_filing(
                 statements[key][label] = normalized
         logger.info("[OK] %s extracted", key.replace("_", " ").title())
         human_delay()
-
-    html = active_page.content()
-    save_debug_html("filing_content.html", html)
 
     if not keep_open:
         close_browser()
@@ -150,11 +323,15 @@ def scrape_filing(
     }
 
 
-def _infer_period(period_of_report: str) -> tuple[str, int]:
-    """Derive a calendar (period_type, fiscal_year) pair from a filing's report date."""
+def _infer_period(period_of_report: str) -> tuple[str, int, date]:
+    """Derive a calendar (period_type, fiscal_year, report_date) triple from a filing's report date.
+
+    Returns a real `date` object, not the raw ISO string -- SQLite's driver
+    (unlike Postgres') refuses to store a plain string into a Date column.
+    """
     report_date = date.fromisoformat(period_of_report)
     quarter = (report_date.month - 1) // 3 + 1
-    return f"Q{quarter}", report_date.year
+    return f"Q{quarter}", report_date.year, report_date
 
 
 def fetch_company_financials(ticker: str) -> dict[str, Any]:
@@ -181,17 +358,21 @@ def fetch_company_financials(ticker: str) -> dict[str, Any]:
                 )
                 continue
 
-            period_type, fiscal_year = _infer_period(filing["period_of_report"])
+            period_type, fiscal_year, report_date = _infer_period(filing["period_of_report"])
+            raw_items = {
+                **result["statements"].get("income_statement", {}),
+                **result["statements"].get("balance_sheet", {}),
+                **result["statements"].get("cash_flow", {}),
+            }
             periods.append(
                 {
                     "period_type": period_type,
                     "fiscal_year": fiscal_year,
-                    "report_date": filing["period_of_report"],
-                    "items": {
-                        **result["statements"].get("income_statement", {}),
-                        **result["statements"].get("balance_sheet", {}),
-                        **result["statements"].get("cash_flow", {}),
-                    },
+                    "report_date": report_date,
+                    # Raw filing labels are kept as-is (for the Financial
+                    # Statements table); canonical keys are added alongside
+                    # them so KPI cards and ratio math have something to read.
+                    "items": {**raw_items, **derive_canonical_line_items(raw_items)},
                 }
             )
             if i < len(filings) - 1:
