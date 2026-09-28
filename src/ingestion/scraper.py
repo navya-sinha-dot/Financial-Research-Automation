@@ -72,44 +72,92 @@ def locate_cash_flow_statement(page):
     )
 
 
-def extract_table(page, table_text_hint: str):
-    """Finds the data table for a statement heading like "CONSOLIDATED
-    STATEMENTS OF OPERATIONS".
+def _compact(text: str) -> str:
+    return "".join(text.lower().split())
 
-    Real SEC filings also list that same heading inside their Table of
-    Contents (as a sentence like "Consolidated Statements of Operations for
-    the years ended ..."), which sits inside its own <table> earlier in the
-    document. Naively searching "does any table contain this text" matches
-    the ToC first and never reaches the real data. Instead: find the
-    heading as its own short, standalone element (not itself inside a
-    table -- the ToC entry is), then take the table that follows it.
+
+def _text_before_table(table, max_chars: int = 400) -> str:
+    """Concatenates the raw text immediately preceding `table`, stopping the
+    moment a node belongs to an earlier <table> (which structurally rules
+    out Table of Contents entries -- they always sit inside their own
+    table). Nodes are joined with NO separator, matching how they actually
+    render: real filings often split a statement's heading across several
+    adjacent DOM text nodes (e.g. inline XBRL tagging) instead of one clean
+    element, and inserting a space would break the reconstructed phrase.
     """
-    soup = BeautifulSoup(page.content(), "lxml")
-    hint = table_text_hint.lower()
+    parts: list[str] = []
+    total = 0
+    for node in table.find_all_previous(string=True):
+        if node.find_parent("table") is not None:
+            break
+        text = str(node)
+        parts.append(text)
+        total += len(text)
+        if total >= max_chars:
+            break
+    return "".join(reversed(parts))
 
-    for el in soup.find_all(string=lambda s: s and hint in s.lower()):
-        parent = el.parent
-        if parent is None or parent.find_parent("table") is not None:
-            continue  # inside a table -- likely a Table of Contents entry
-        own_text = " ".join(parent.get_text(" ").split())
-        if len(own_text) > len(hint) + 60:
-            continue  # a long sentence that happens to mention the heading
-        table = parent.find_next("table")
-        if table is not None:
+
+# Heading variant -> other variants that must NOT also be present nearby.
+# Guards against e.g. "INCOME STATEMENTS" matching inside the heading for
+# the *comprehensive* income statement, a different table entirely.
+_HEADING_EXCLUSIONS: dict[str, list[str]] = {
+    "incomestatements": ["comprehensiveincomestatements"],
+}
+
+
+def _hint_is_trailing(hint: str, preceding: str, *, tail_slack: int = 8) -> bool:
+    """True if `hint` is (essentially) the last thing said before the
+    table, not just mentioned somewhere earlier in a longer, unrelated
+    sentence (e.g. a disclosure paragraph that happens to reference the
+    statement's name in passing). `tail_slack` allows a few stray trailing
+    characters (odd punctuation, stray entities) without requiring an exact
+    suffix match.
+    """
+    idx = preceding.rfind(hint)
+    if idx == -1:
+        return False
+    return len(preceding) - (idx + len(hint)) <= tail_slack
+
+
+def extract_table(page, table_text_hint: str | list[str]):
+    """Finds the data table for a statement heading.
+
+    Real filings use different wording for the same statement -- Apple
+    titles it "CONSOLIDATED STATEMENTS OF OPERATIONS", Microsoft just
+    "INCOME STATEMENTS" -- so `table_text_hint` may be a single string or a
+    list of known variants, checked in order against the text immediately
+    preceding each table (see `_text_before_table`). The match must land at
+    the end of that preceding text (see `_hint_is_trailing`) so a long,
+    unrelated sentence that merely mentions the heading in passing -- e.g.
+    right before a Table of Contents table -- isn't mistaken for it.
+    """
+    hints = [table_text_hint] if isinstance(table_text_hint, str) else list(table_text_hint)
+    compact_hints = [_compact(h) for h in hints]
+
+    soup = BeautifulSoup(page.content(), "lxml")
+    for table in soup.find_all("table"):
+        preceding = _compact(_text_before_table(table))
+        for hint in compact_hints:
+            if not _hint_is_trailing(hint, preceding):
+                continue
+            if any(excluded in preceding for excluded in _HEADING_EXCLUSIONS.get(hint, [])):
+                continue
             return table
 
-    # Fallback for filings where the heading isn't its own element: search
-    # inside every table directly, same as before.
+    # Fallback for filings where no heading variant matches at all: search
+    # inside every table directly.
     tables = soup.find_all("table")
     for table in tables:
-        if hint in table.get_text(" ").lower():
+        table_text = _compact(table.get_text(" "))
+        if any(hint in table_text for hint in compact_hints):
             return table
     if tables:
         return tables[0]
-    raise ValueError(f"Could not locate table for {table_text_hint}.")
+    raise ValueError(f"Could not locate table for {hints[0]}.")
 
 
-def extract_financial_rows(page, table_text_hint: str) -> dict[str, Any]:
+def extract_financial_rows(page, table_text_hint: str | list[str]) -> dict[str, Any]:
     table = extract_table(page, table_text_hint)
     result: dict[str, Any] = {}
     for row in table.find_all("tr"):
@@ -152,13 +200,36 @@ def scrape_filing(
 
     statements: dict[str, dict[str, Any]] = {"income_statement": {}, "balance_sheet": {}, "cash_flow": {}}
 
-    for step_name, hint, key in [
-        ("[5/10] Scraping Income Statement", "CONSOLIDATED STATEMENTS OF OPERATIONS", "income_statement"),
-        ("[6/10] Scraping Balance Sheet", "CONSOLIDATED BALANCE SHEETS", "balance_sheet"),
-        ("[7/10] Scraping Cash Flow", "CONSOLIDATED STATEMENTS OF CASH FLOWS", "cash_flow"),
+    for step_name, hints, key in [
+        (
+            "[5/10] Scraping Income Statement",
+            [
+                "CONSOLIDATED STATEMENTS OF OPERATIONS",
+                "CONSOLIDATED STATEMENTS OF INCOME",
+                "STATEMENTS OF OPERATIONS",
+                "STATEMENTS OF INCOME",
+                "INCOME STATEMENTS",
+            ],
+            "income_statement",
+        ),
+        (
+            "[6/10] Scraping Balance Sheet",
+            ["CONSOLIDATED BALANCE SHEETS", "BALANCE SHEETS", "STATEMENTS OF FINANCIAL POSITION"],
+            "balance_sheet",
+        ),
+        (
+            "[7/10] Scraping Cash Flow",
+            [
+                "CONSOLIDATED STATEMENTS OF CASH FLOWS",
+                "STATEMENTS OF CASH FLOWS",
+                "CASH FLOWS STATEMENTS",
+                "CASH FLOW STATEMENTS",
+            ],
+            "cash_flow",
+        ),
     ]:
         logger.info(step_name)
-        raw_rows = extract_financial_rows(active_page, hint)
+        raw_rows = extract_financial_rows(active_page, hints)
         if not raw_rows:
             raise ValueError(f"Could not locate the {key} in the filing.")
         for label, raw in raw_rows.items():

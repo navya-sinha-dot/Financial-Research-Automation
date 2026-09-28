@@ -9,6 +9,22 @@ from pathlib import Path
 from src.ingestion.scraper import extract_financial_rows, extract_table
 
 FIXTURE = Path("tests/fixtures/sec_filing_with_toc.html").read_text(encoding="utf-8")
+MSFT_STYLE_FIXTURE = Path("tests/fixtures/sec_filing_msft_style.html").read_text(encoding="utf-8")
+
+INCOME_STATEMENT_HINTS = [
+    "CONSOLIDATED STATEMENTS OF OPERATIONS",
+    "CONSOLIDATED STATEMENTS OF INCOME",
+    "STATEMENTS OF OPERATIONS",
+    "STATEMENTS OF INCOME",
+    "INCOME STATEMENTS",
+]
+BALANCE_SHEET_HINTS = ["CONSOLIDATED BALANCE SHEETS", "BALANCE SHEETS", "STATEMENTS OF FINANCIAL POSITION"]
+CASH_FLOW_HINTS = [
+    "CONSOLIDATED STATEMENTS OF CASH FLOWS",
+    "STATEMENTS OF CASH FLOWS",
+    "CASH FLOWS STATEMENTS",
+    "CASH FLOW STATEMENTS",
+]
 
 
 class _FakePage:
@@ -50,3 +66,45 @@ def test_extract_table_finds_balance_sheet_after_income_statement():
     table = extract_table(page, "CONSOLIDATED BALANCE SHEETS")
     text = table.get_text(" ")
     assert "Total Assets" in text
+
+
+def test_extract_table_reconstructs_heading_split_across_adjacent_nodes():
+    """Regression test for a real bug found on a live MSFT scrape: the
+    heading was split across two adjacent DOM text nodes with no space
+    between them ("...FINANCIAL STATEMENTSINCOME STATEMENTS"), so a
+    single-node substring match never found it and fell back to the first
+    table in the document -- the cover page's checkbox table.
+    """
+    page = _FakePage(MSFT_STYLE_FIXTURE)
+    table = extract_table(page, INCOME_STATEMENT_HINTS)
+    text = table.get_text(" ")
+    assert "Total revenue" in text
+    assert "Net income" in text
+    assert "☐" not in text  # cover page checkbox glyphs must not appear
+    assert "☑" not in text
+
+
+def test_extract_table_does_not_confuse_income_statement_with_comprehensive_income():
+    page = _FakePage(MSFT_STYLE_FIXTURE)
+    table = extract_table(page, INCOME_STATEMENT_HINTS)
+    text = table.get_text(" ")
+    assert "Other comprehensive income" not in text
+
+
+def test_extract_table_finds_balance_sheet_with_plain_heading_wording():
+    page = _FakePage(MSFT_STYLE_FIXTURE)
+    table = extract_table(page, BALANCE_SHEET_HINTS)
+    assert "Total current assets" in table.get_text(" ")
+
+
+def test_extract_table_finds_cash_flow_with_plain_heading_wording():
+    page = _FakePage(MSFT_STYLE_FIXTURE)
+    table = extract_table(page, CASH_FLOW_HINTS)
+    assert "Net cash from operations" in table.get_text(" ")
+
+
+def test_extract_financial_rows_with_msft_style_fragmented_heading():
+    page = _FakePage(MSFT_STYLE_FIXTURE)
+    rows = extract_financial_rows(page, INCOME_STATEMENT_HINTS)
+    assert rows.get("Total revenue") == "$65,585"
+    assert rows.get("Net income") == "$24,667"
