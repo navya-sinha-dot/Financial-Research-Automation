@@ -14,7 +14,7 @@ from src.core.config import settings
 from src.ingestion.browser import close_browser, create_page, human_delay, save_debug_html, save_debug_screenshot
 from src.ingestion.captcha_handler import handle_captcha
 from src.ingestion.filing_discovery import discover_recent_filings
-from src.ingestion.normalizer import normalize_financial_value
+from src.ingestion.normalizer import derive_canonical_line_items, normalize_financial_value
 
 logger = logging.getLogger(__name__)
 
@@ -214,16 +214,20 @@ def fetch_company_financials(ticker: str) -> dict[str, Any]:
                 continue
 
             period_type, fiscal_year, report_date = _infer_period(filing["period_of_report"])
+            raw_items = {
+                **result["statements"].get("income_statement", {}),
+                **result["statements"].get("balance_sheet", {}),
+                **result["statements"].get("cash_flow", {}),
+            }
             periods.append(
                 {
                     "period_type": period_type,
                     "fiscal_year": fiscal_year,
                     "report_date": report_date,
-                    "items": {
-                        **result["statements"].get("income_statement", {}),
-                        **result["statements"].get("balance_sheet", {}),
-                        **result["statements"].get("cash_flow", {}),
-                    },
+                    # Raw filing labels are kept as-is (for the Financial
+                    # Statements table); canonical keys are added alongside
+                    # them so KPI cards and ratio math have something to read.
+                    "items": {**raw_items, **derive_canonical_line_items(raw_items)},
                 }
             )
             if i < len(filings) - 1:
