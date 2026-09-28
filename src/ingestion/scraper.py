@@ -178,11 +178,15 @@ def scrape_filing(
     }
 
 
-def _infer_period(period_of_report: str) -> tuple[str, int]:
-    """Derive a calendar (period_type, fiscal_year) pair from a filing's report date."""
+def _infer_period(period_of_report: str) -> tuple[str, int, date]:
+    """Derive a calendar (period_type, fiscal_year, report_date) triple from a filing's report date.
+
+    Returns a real `date` object, not the raw ISO string -- SQLite's driver
+    (unlike Postgres') refuses to store a plain string into a Date column.
+    """
     report_date = date.fromisoformat(period_of_report)
     quarter = (report_date.month - 1) // 3 + 1
-    return f"Q{quarter}", report_date.year
+    return f"Q{quarter}", report_date.year, report_date
 
 
 def fetch_company_financials(ticker: str) -> dict[str, Any]:
@@ -209,12 +213,12 @@ def fetch_company_financials(ticker: str) -> dict[str, Any]:
                 )
                 continue
 
-            period_type, fiscal_year = _infer_period(filing["period_of_report"])
+            period_type, fiscal_year, report_date = _infer_period(filing["period_of_report"])
             periods.append(
                 {
                     "period_type": period_type,
                     "fiscal_year": fiscal_year,
-                    "report_date": filing["period_of_report"],
+                    "report_date": report_date,
                     "items": {
                         **result["statements"].get("income_statement", {}),
                         **result["statements"].get("balance_sheet", {}),
