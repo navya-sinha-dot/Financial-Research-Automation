@@ -101,13 +101,20 @@ class FRAApiClient:
             return None
 
     def trigger_ingestion(self, ticker: str) -> dict[str, Any] | None:
-        """Trigger asynchronous data scraping for a ticker."""
+        """Trigger asynchronous data scraping for a ticker.
+
+        In CELERY_TASK_ALWAYS_EAGER mode (local/demo), this call blocks
+        until the whole multi-quarter browser scrape finishes -- real runs
+        take 30-90+ seconds across several filings, so a short timeout here
+        makes the dashboard report "failed" on a job that actually succeeded
+        in the background.
+        """
         try:
             resp = requests.post(
                 f"{self.base_url}/ingest",
                 json={"ticker": ticker},
                 headers=self._write_headers(),
-                timeout=10,
+                timeout=180,
             )
             resp.raise_for_status()
             return resp.json()
