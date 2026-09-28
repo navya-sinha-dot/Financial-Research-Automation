@@ -119,6 +119,12 @@ def scrape_filing(
     wait_for_filing(active_page)
     logger.info("[OK] Filing loaded")
 
+    # Save the raw HTML immediately, before attempting extraction. If
+    # extraction fails below, this is the artifact you need to diagnose why
+    # -- saving it only on success would mean it's missing exactly when
+    # you need it most.
+    save_debug_html("filing_content.html", active_page.content())
+
     statements: dict[str, dict[str, Any]] = {"income_statement": {}, "balance_sheet": {}, "cash_flow": {}}
 
     for step_name, hint, key in [
@@ -136,9 +142,6 @@ def scrape_filing(
                 statements[key][label] = normalized
         logger.info("[OK] %s extracted", key.replace("_", " ").title())
         human_delay()
-
-    html = active_page.content()
-    save_debug_html("filing_content.html", html)
 
     if not keep_open:
         close_browser()
