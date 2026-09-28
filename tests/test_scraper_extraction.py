@@ -6,11 +6,14 @@ actual data table that follows the real, standalone heading element.
 
 from pathlib import Path
 
-from src.ingestion.scraper import extract_financial_rows, extract_table
+from src.ingestion.scraper import extract_financial_rows, extract_financial_value, extract_table
 
 FIXTURE = Path("tests/fixtures/sec_filing_with_toc.html").read_text(encoding="utf-8")
 MSFT_STYLE_FIXTURE = Path("tests/fixtures/sec_filing_msft_style.html").read_text(encoding="utf-8")
 SPACER_COLUMNS_FIXTURE = Path("tests/fixtures/sec_filing_spacer_columns.html").read_text(encoding="utf-8")
+DUPLICATE_LABELS_FIXTURE = Path("tests/fixtures/sec_filing_duplicate_labels_and_negatives.html").read_text(
+    encoding="utf-8"
+)
 
 INCOME_STATEMENT_HINTS = [
     "CONSOLIDATED STATEMENTS OF OPERATIONS",
@@ -131,3 +134,39 @@ def test_extract_financial_rows_drops_section_header_rows_with_no_real_value():
     page = _FakePage(SPACER_COLUMNS_FIXTURE)
     rows = extract_financial_rows(page, INCOME_STATEMENT_HINTS)
     assert "Cost of revenue:" not in rows
+
+
+def test_extract_financial_rows_disambiguates_labels_repeated_under_different_sections():
+    """Regression test for a real bug found on a live MSFT scrape: "Product"
+    and "Service and other" each appear twice in the real income statement
+    (once under Revenue, once under Cost of revenue) with different
+    values. A plain label-keyed dict let the Cost of revenue occurrence
+    silently overwrite the Revenue one, so the Line Items table displayed
+    the wrong number under a correct-looking label with no error at all.
+    """
+    page = _FakePage(DUPLICATE_LABELS_FIXTURE)
+    rows = extract_financial_rows(page, INCOME_STATEMENT_HINTS)
+
+    assert rows.get("Product") == "15,922"
+    assert rows.get("Service and other") == "61,751"
+    assert rows.get("Cost of revenue - Product") == "2,922"
+    assert rows.get("Cost of revenue - Service and other") == "21,121"
+    assert rows.get("Total revenue") == "77,673"
+    assert rows.get("Total cost of revenue") == "24,043"
+
+
+def test_extract_financial_rows_reconstructs_negative_value_split_across_cells():
+    """Regression test for a real bug found on a live MSFT scrape: a
+    negative value's closing parenthesis sometimes sits in its own
+    trailing cell, separate from the "(" + number cell. Without
+    reattaching it, normalize_financial_value() never sees a matching
+    "(...)" pair and silently returns a positive number instead of
+    negative.
+    """
+    page = _FakePage(DUPLICATE_LABELS_FIXTURE)
+    rows = extract_financial_rows(page, INCOME_STATEMENT_HINTS)
+
+    raw_value = rows.get("Other expense, net")
+    assert raw_value is not None
+    assert "(" in raw_value and ")" in raw_value
+    assert extract_financial_value(raw_value) == -3660.0

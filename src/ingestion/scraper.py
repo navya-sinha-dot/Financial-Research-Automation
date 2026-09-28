@@ -172,9 +172,21 @@ def extract_financial_rows(page, table_text_hint: str | list[str]) -> dict[str, 
     that actually has content once spacer/currency-symbol placeholders are
     ignored -- the most recent period's value, same column Apple's simpler
     tables already put there.
+
+    Two more real-world quirks this handles:
+    - A negative number's closing parenthesis sometimes lands in its own
+      trailing cell ("(" + "3,660" in the value cell, ")" in the next) --
+      normalize_financial_value() only recognizes a negative when both "("
+      and ")" are present, so the closing paren is reattached here.
+    - The same sub-item label (e.g. "Product", "Service and other") is
+      often reused under two different section headers (Revenue: and Cost
+      of revenue:) with different values. Keying purely by label would let
+      the second silently overwrite the first, so a repeated label is
+      disambiguated with the section header it appeared under.
     """
     table = extract_table(page, table_text_hint)
     result: dict[str, Any] = {}
+    section = ""
     for row in table.find_all("tr"):
         cells = row.find_all(["td", "th"])
         if len(cells) < 2:
@@ -182,14 +194,31 @@ def extract_financial_rows(page, table_text_hint: str | list[str]) -> dict[str, 
         label = " ".join(cells[0].get_text(" ").split())
         if not label:
             continue
+
         value = ""
-        for cell in cells[1:]:
-            candidate = " ".join(cell.get_text(" ").split())
+        for idx in range(1, len(cells)):
+            candidate = " ".join(cells[idx].get_text(" ").split())
             if candidate and candidate not in _PLACEHOLDER_CELL_VALUES:
                 value = candidate
+                if "(" in value and ")" not in value:
+                    for trailing_cell in cells[idx + 1 :]:
+                        trailing_text = " ".join(trailing_cell.get_text(" ").split())
+                        if trailing_text:
+                            value += trailing_text
+                            break
                 break
-        if value:
-            result[label] = value
+
+        if not value:
+            # A label with no value at all is a section header (e.g.
+            # "Revenue:", "Cost of revenue:"), not a data row.
+            if label.endswith(":"):
+                section = label.rstrip(":").strip()
+            continue
+
+        key = label
+        if key in result and section:
+            key = f"{section} - {label}"
+        result[key] = value
     return result
 
 
