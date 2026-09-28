@@ -14,6 +14,7 @@ SPACER_COLUMNS_FIXTURE = Path("tests/fixtures/sec_filing_spacer_columns.html").r
 DUPLICATE_LABELS_FIXTURE = Path("tests/fixtures/sec_filing_duplicate_labels_and_negatives.html").read_text(
     encoding="utf-8"
 )
+TRAILING_UNITS_NOTE_FIXTURE = Path("tests/fixtures/sec_filing_trailing_units_note.html").read_text(encoding="utf-8")
 
 INCOME_STATEMENT_HINTS = [
     "CONSOLIDATED STATEMENTS OF OPERATIONS",
@@ -170,3 +171,27 @@ def test_extract_financial_rows_reconstructs_negative_value_split_across_cells()
     assert raw_value is not None
     assert "(" in raw_value and ")" in raw_value
     assert extract_financial_value(raw_value) == -3660.0
+
+
+def test_extract_table_matches_heading_followed_by_a_trailing_units_note():
+    """Regression test for a real bug found on a live GOOGL scrape: the
+    exact heading was already in the hint list ("CONSOLIDATED STATEMENTS
+    OF INCOME"), but it's immediately followed by a units/unaudited note
+    -- "...OF INCOME(in millions, except per share amounts; unaudited)" --
+    before the table starts. The trailing-match check required the
+    heading to be (near) the very last thing before the table, so that
+    note pushed it past the tolerance and extraction fell through to the
+    filing's own Table of Contents (Part II item index) instead.
+    """
+    page = _FakePage(TRAILING_UNITS_NOTE_FIXTURE)
+    table = extract_table(page, INCOME_STATEMENT_HINTS)
+    text = table.get_text(" ")
+    assert "Revenues" in text
+    assert "Net income" in text
+    assert "Other comprehensive income" not in text
+
+
+def test_extract_table_with_trailing_units_note_finds_balance_sheet_and_cash_flow():
+    page = _FakePage(TRAILING_UNITS_NOTE_FIXTURE)
+    assert "Total current assets" in extract_table(page, BALANCE_SHEET_HINTS).get_text(" ")
+    assert "Net cash from operations" in extract_table(page, CASH_FLOW_HINTS).get_text(" ")
