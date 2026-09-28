@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+  <head><title>Example 10-Q (repeated sub-item labels + a negative split across cells)</title></head>
+  <body>
+    <!-- Real Microsoft 10-Q structure: "Product" and "Service and other"
+         each appear twice -- once under Revenue, once under Cost of
+         revenue -- with different values. A plain label-keyed dict would
+         let the second occurrence silently overwrite the first. -->
+    <span>INCOME STATEMENTS</span>
+    <table>
+      <tr><th></th><th colspan="2">2025</th></tr>
+      <tr>
+        <td>Revenue:</td>
+        <td>&#160;</td><td>&#160;</td>
+      </tr>
+      <tr>
+        <td>Product</td>
+        <td>&#160;</td><td>15,922</td>
+      </tr>
+      <tr>
+        <td>Service and other</td>
+        <td>&#160;</td><td>61,751</td>
+      </tr>
+      <tr>
+        <td>Total revenue</td>
+        <td>&#160;</td><td>77,673</td>
+      </tr>
+      <tr>
+        <td>Cost of revenue:</td>
+        <td>&#160;</td><td>&#160;</td>
+      </tr>
+      <tr>
+        <td>Product</td>
+        <td>&#160;</td><td>2,922</td>
+      </tr>
+      <tr>
+        <td>Service and other</td>
+        <td>&#160;</td><td>21,121</td>
+      </tr>
+      <tr>
+        <td>Total cost of revenue</td>
+        <td>&#160;</td><td>24,043</td>
+      </tr>
+      <!-- Negative value whose closing parenthesis sits in its own
+           trailing cell, separate from the "(" + number cell. -->
+      <tr>
+        <td>Other expense, net</td>
+        <td>&#160;</td><td>( 3,660</td><td>)</td>
+      </tr>
+      <tr>
+        <td>Net income</td>
+        <td>&#160;</td><td>27,747</td>
+      </tr>
+    </table>
+  </body>
+</html>
