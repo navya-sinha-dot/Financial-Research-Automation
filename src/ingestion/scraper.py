@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date
 from typing import Any
 
@@ -106,6 +107,27 @@ _HEADING_EXCLUSIONS: dict[str, list[str]] = {
 }
 
 
+_TRAILING_PAREN_RE = re.compile(r"\([^()]*\)$")
+
+
+def _strip_trailing_parentheticals(text: str) -> str:
+    """Strips trailing "(...)" groups, repeatedly.
+
+    Statement headings are routinely followed by a units/unaudited note
+    before the table starts -- e.g. "CONSOLIDATED STATEMENTS OF
+    INCOME(in millions, except per share amounts; unaudited)" -- which
+    would otherwise push the heading past `_hint_is_trailing`'s tolerance.
+    This is a narrow, predictable pattern (a real trailing parenthetical),
+    unlike just widening that tolerance, which would let a long unrelated
+    sentence with normal trailing prose slip back in.
+    """
+    while True:
+        stripped = _TRAILING_PAREN_RE.sub("", text)
+        if stripped == text:
+            return text
+        text = stripped
+
+
 def _hint_is_trailing(hint: str, preceding: str, *, tail_slack: int = 8) -> bool:
     """True if `hint` is (essentially) the last thing said before the
     table, not just mentioned somewhere earlier in a longer, unrelated
@@ -114,6 +136,7 @@ def _hint_is_trailing(hint: str, preceding: str, *, tail_slack: int = 8) -> bool
     characters (odd punctuation, stray entities) without requiring an exact
     suffix match.
     """
+    preceding = _strip_trailing_parentheticals(preceding)
     idx = preceding.rfind(hint)
     if idx == -1:
         return False
