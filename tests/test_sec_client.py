@@ -126,3 +126,19 @@ def test_filing_history_raises_when_no_matching_filings(client, monkeypatch):
 
     with pytest.raises(SECClientError):
         client.filing_history("AAPL", filing_type="10-Q", limit=3)
+
+
+def test_filing_history_gives_a_specific_error_for_foreign_private_issuers(client, monkeypatch):
+    """Regression test for a real user-hit case: INFY (Infosys) files Form
+    20-F/6-K, not 10-Q/10-K, so it should explain why -- not fall through to
+    the generic "no filing found" message, which reads like a scraper bug.
+    """
+    payload = _fake_submissions_payload([("20-F", "2024-06-15"), ("6-K", "2024-03-01")])
+
+    monkeypatch.setattr(client, "cik_lookup", lambda ticker: "0001067491")
+    monkeypatch.setattr(client, "_read_cache", lambda url: None)
+    monkeypatch.setattr(client, "_write_cache", lambda url, payload: None)
+    monkeypatch.setattr(client, "_request", lambda url: SimpleNamespace(json=lambda: payload))
+
+    with pytest.raises(SECClientError, match="foreign private issuer"):
+        client.filing_history("INFY", filing_type="10-Q", limit=4)

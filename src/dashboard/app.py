@@ -162,7 +162,8 @@ selected_company = company_options.get(selected_label) if company_options and se
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚡ Live Data Ingestion")
 st.sidebar.caption("Search a ticker to watch SEC Chromium scraping in real time:")
-new_ticker = st.sidebar.text_input("Ticker Symbol (e.g., AAPL, GOOGL, INFY)", value="").strip().upper()
+new_ticker = st.sidebar.text_input("Ticker Symbol (e.g., AAPL, MSFT, GOOGL)", value="").strip().upper()
+st.sidebar.caption("US domestic filers only (10-Q/10-K) -- foreign issuers like INFY file 20-F/6-K instead.")
 if st.sidebar.button("Fetch & Ingest Ticker", use_container_width=True):
     if new_ticker:
         with st.sidebar.status(f"Triggering ingestion for {new_ticker}..."):
@@ -173,7 +174,8 @@ if st.sidebar.button("Fetch & Ingest Ticker", use_container_width=True):
                 time.sleep(1)
                 st.rerun()
             else:
-                st.sidebar.error("Failed to queue ingestion job.")
+                error_detail = ((ingest_res or {}).get("result") or {}).get("error")
+                st.sidebar.error(error_detail or "Failed to queue ingestion job.")
     else:
         st.sidebar.warning("Please enter a valid ticker.")
 
