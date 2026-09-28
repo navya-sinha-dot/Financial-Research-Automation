@@ -73,8 +73,33 @@ def locate_cash_flow_statement(page):
 
 
 def extract_table(page, table_text_hint: str):
+    """Finds the data table for a statement heading like "CONSOLIDATED
+    STATEMENTS OF OPERATIONS".
+
+    Real SEC filings also list that same heading inside their Table of
+    Contents (as a sentence like "Consolidated Statements of Operations for
+    the years ended ..."), which sits inside its own <table> earlier in the
+    document. Naively searching "does any table contain this text" matches
+    the ToC first and never reaches the real data. Instead: find the
+    heading as its own short, standalone element (not itself inside a
+    table -- the ToC entry is), then take the table that follows it.
+    """
     soup = BeautifulSoup(page.content(), "lxml")
     hint = table_text_hint.lower()
+
+    for el in soup.find_all(string=lambda s: s and hint in s.lower()):
+        parent = el.parent
+        if parent is None or parent.find_parent("table") is not None:
+            continue  # inside a table -- likely a Table of Contents entry
+        own_text = " ".join(parent.get_text(" ").split())
+        if len(own_text) > len(hint) + 60:
+            continue  # a long sentence that happens to mention the heading
+        table = parent.find_next("table")
+        if table is not None:
+            return table
+
+    # Fallback for filings where the heading isn't its own element: search
+    # inside every table directly, same as before.
     tables = soup.find_all("table")
     for table in tables:
         if hint in table.get_text(" ").lower():
