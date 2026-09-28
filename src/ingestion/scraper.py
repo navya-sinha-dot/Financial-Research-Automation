@@ -157,7 +157,22 @@ def extract_table(page, table_text_hint: str | list[str]):
     raise ValueError(f"Could not locate table for {hints[0]}.")
 
 
+_PLACEHOLDER_CELL_VALUES = {"$", "-", "—", "–"}
+
+
 def extract_financial_rows(page, table_text_hint: str | list[str]) -> dict[str, Any]:
+    """Extracts {label: value} rows from a statement table.
+
+    SEC filings don't agree on table layout: Apple's rows are a clean
+    label/value pair (cells[0]/cells[1]), but Microsoft's (and many
+    others') insert spacer and "$"-only cells for alignment
+    (`<td>Label</td><td>&#160;</td><td>$</td><td>65,585</td>`), so blindly
+    taking cells[1] grabs an empty spacer instead of the real number and
+    silently drops every row. Instead, take the first cell after the label
+    that actually has content once spacer/currency-symbol placeholders are
+    ignored -- the most recent period's value, same column Apple's simpler
+    tables already put there.
+    """
     table = extract_table(page, table_text_hint)
     result: dict[str, Any] = {}
     for row in table.find_all("tr"):
@@ -165,8 +180,15 @@ def extract_financial_rows(page, table_text_hint: str | list[str]) -> dict[str, 
         if len(cells) < 2:
             continue
         label = " ".join(cells[0].get_text(" ").split())
-        value = " ".join(cells[1].get_text(" ").split())
-        if label and value:
+        if not label:
+            continue
+        value = ""
+        for cell in cells[1:]:
+            candidate = " ".join(cell.get_text(" ").split())
+            if candidate and candidate not in _PLACEHOLDER_CELL_VALUES:
+                value = candidate
+                break
+        if value:
             result[label] = value
     return result
 

@@ -10,6 +10,7 @@ from src.ingestion.scraper import extract_financial_rows, extract_table
 
 FIXTURE = Path("tests/fixtures/sec_filing_with_toc.html").read_text(encoding="utf-8")
 MSFT_STYLE_FIXTURE = Path("tests/fixtures/sec_filing_msft_style.html").read_text(encoding="utf-8")
+SPACER_COLUMNS_FIXTURE = Path("tests/fixtures/sec_filing_spacer_columns.html").read_text(encoding="utf-8")
 
 INCOME_STATEMENT_HINTS = [
     "CONSOLIDATED STATEMENTS OF OPERATIONS",
@@ -108,3 +109,25 @@ def test_extract_financial_rows_with_msft_style_fragmented_heading():
     rows = extract_financial_rows(page, INCOME_STATEMENT_HINTS)
     assert rows.get("Total revenue") == "$65,585"
     assert rows.get("Net income") == "$24,667"
+
+
+def test_extract_financial_rows_skips_spacer_and_currency_symbol_cells():
+    """Regression test for a real bug found on a live MSFT scrape: the
+    table WAS found correctly, but every row still came back empty because
+    extract_financial_rows hardcoded cells[1] as "the value" -- correct for
+    Apple's clean 2-column rows, but Microsoft's real tables insert spacer
+    (&nbsp;) and bare "$" cells between the label and the number for
+    alignment, so cells[1] was always an empty spacer. All rows were
+    silently dropped, which looked like extraction succeeding with zero
+    data rather than a clear failure.
+    """
+    page = _FakePage(SPACER_COLUMNS_FIXTURE)
+    rows = extract_financial_rows(page, INCOME_STATEMENT_HINTS)
+    assert rows.get("Total revenue") == "65,585"
+    assert rows.get("Net income") == "24,667"
+
+
+def test_extract_financial_rows_drops_section_header_rows_with_no_real_value():
+    page = _FakePage(SPACER_COLUMNS_FIXTURE)
+    rows = extract_financial_rows(page, INCOME_STATEMENT_HINTS)
+    assert "Cost of revenue:" not in rows
