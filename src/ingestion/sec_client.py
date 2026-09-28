@@ -161,6 +161,13 @@ class SECClient:
                 break
 
         if not filings:
+            forms_seen = set(recent.get("form", []))
+            if forms_seen & {"20-F", "40-F", "6-K"}:
+                raise SECClientError(
+                    f"{ticker.upper()} is a foreign private issuer -- it files Form 20-F/40-F "
+                    "(annual) and 6-K instead of 10-Q/10-K. This scraper only supports the "
+                    "10-Q/10-K statement layout used by US domestic filers."
+                )
             raise SECClientError(f"No recent {filing_type} or 10-K filing found for {ticker.upper()}.")
         return filings
 
